@@ -1,0 +1,12 @@
+[Unit]
+Description=Telegram assistant bot
+After=network-online.target
+
+[Service]
+WorkingDirectory=/opt/assistant-bot
+ExecStart=/opt/assistant-bot/.venv/bin/python -m bot.main
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
