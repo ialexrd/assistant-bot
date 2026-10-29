@@ -11,7 +11,7 @@ from aiogram.types import (BusinessConnection, CallbackQuery, InlineKeyboardButt
                            Message)
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from . import agent, core, dialogs, llm, settings, storage, stt, vk
+from . import agent, core, dialogs, llm, mail, settings, storage, stt, vk
 from .config import cfg
 from .fmt import DOW_SHORT, e, human_date, today
 from .fmt import order as fmt_order
@@ -163,6 +163,7 @@ async def handle_owner_text(msg: Message, text: str) -> None:
     for o in run.new_orders:
         if o.get("status") == "booked":
             asyncio.create_task(storage.sync_to_sheets(o))
+        asyncio.create_task(mail.order("Записан" if o.get("status") == "booked" else "Новая заявка", o))
     markup = None
     if run.changes:
         undo_token = secrets.token_hex(4)

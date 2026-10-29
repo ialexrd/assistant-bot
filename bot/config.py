@@ -44,6 +44,13 @@ class Config:
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     transcribe_client_voice: bool = os.getenv("TRANSCRIBE_CLIENT_VOICE", "1") == "1"
 
+    # Копия заявок на почту: SMTP Яндекса и пароль приложения (не обычный пароль от почты)
+    mail_to: str = os.getenv("MAIL_TO", "")
+    smtp_user: str = os.getenv("SMTP_USER", "")
+    smtp_password: str = os.getenv("SMTP_PASSWORD", "")
+    smtp_host: str = os.getenv("SMTP_HOST", "smtp.yandex.ru")
+    smtp_port: int = int(os.getenv("SMTP_PORT", "465"))
+
     sheets_url: str = os.getenv("SHEETS_URL", "")
     data_dir: Path = Path(os.getenv("DATA_DIR", "data"))
 

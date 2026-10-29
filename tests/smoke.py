@@ -7,7 +7,8 @@ import tempfile
 import types
 from types import SimpleNamespace as NS
 
-os.environ.update({"BOT_TOKEN": "1:x", "OWNER_IDS": "1", "DATA_DIR": tempfile.mkdtemp(), "SHEETS_URL": ""})
+os.environ.update({"BOT_TOKEN": "1:x", "OWNER_IDS": "1", "DATA_DIR": tempfile.mkdtemp(), "SHEETS_URL": "",
+                   "MAIL_TO": "me@yandex.ru", "SMTP_USER": "me@yandex.ru", "SMTP_PASSWORD": "x"})
 fa = types.ModuleType("firebase_admin")
 fa.initialize_app = lambda *a, **k: None
 fs = types.ModuleType("firebase_admin.firestore")
@@ -15,7 +16,10 @@ fs.client = lambda: None
 fa.firestore = fs
 sys.modules.update({"firebase_admin": fa, "firebase_admin.firestore": fs})
 
-from bot import agent, core, dialogs, llm, settings, storage  # noqa: E402
+from bot import agent, core, dialogs, llm, mail, settings, storage  # noqa: E402
+
+MAIL: list[tuple[str, str]] = []
+mail._send = lambda subject, body: MAIL.append((subject, body))
 
 # ---------- Заглушка CRM ----------
 DB: dict[str, dict] = {}
@@ -124,6 +128,14 @@ async def test_flow():
     for _ in range(20):
         await asyncio.sleep(0)
     assert DB["o2"]["status"] == "booked" and DB["o2"]["src"] == "ВКонтакте", DB
+
+    # Письма: новая заявка, записан, исправлен, записан (ВК)
+    await asyncio.sleep(0.3)
+    subjects = [m[0] for m in MAIL]
+    assert subjects[0].startswith("Новая заявка: Анна"), subjects
+    assert "Записан: Анна, " in subjects[1] and "14:00" in subjects[1], subjects
+    assert subjects[2].startswith("Исправлен: Анна") and subjects[3].startswith("Записан:") and len(MAIL) == 4, subjects
+    assert "Телефон: +79001234567" in MAIL[1][1] and "Адрес: Ленина 5, кв 3" in MAIL[1][1], MAIL[1][1]
 
 
 async def test_agent():

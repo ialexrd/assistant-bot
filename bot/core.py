@@ -6,7 +6,7 @@ import time
 from collections import defaultdict
 from typing import Awaitable, Callable
 
-from . import dialogs, llm, settings, storage
+from . import dialogs, llm, mail, settings, storage
 from .fmt import CHANNEL_RU, e, order_card
 
 log = logging.getLogger("core")
@@ -68,6 +68,7 @@ async def _check_lead(key: str, d: dict) -> None:
             "note": "; ".join(x for x in (res.summary, contact) if x)}
     oid = await storage.add_order(lead)
     dialogs.update(key, order_id=oid, state="lead")
+    asyncio.create_task(mail.order("Новая заявка", lead, f"{CHANNEL_RU[d['channel']]}: {_who(d)}"))
     await _notify(f"🆕 <b>Новая заявка</b> из {CHANNEL_RU[d['channel']]}\n{e(_who(d))}\n"
                   f"{e(res.summary)}\n\nЗаписал в CRM со статусом «новая».",
                   [("🙅 Не клиент", f"notclient:{key}:{oid}")])
@@ -122,6 +123,8 @@ async def book(key: str) -> None:
     if not current or current.get("status") != "booked":
         asyncio.create_task(storage.sync_to_sheets(fields))
     order = (current or {}) | fields
+    asyncio.create_task(mail.order("Записан", order, "Не нашёл в переписке: " + ", ".join(draft.missing)
+                                   if draft.missing else ""))
     token = secrets.token_hex(4)
     dialogs.kv_set(f"card:{token}", {"key": key, "order_id": oid, "before": before})
     await _notify(card_text(order, draft.missing, d), card_buttons(token))
@@ -153,6 +156,7 @@ async def correct(token: str, correction: str) -> str | None:
     fields = {k: getattr(draft, k) for k in ORDER_KEYS if getattr(draft, k) != (current.get(k) or "")}
     if fields:
         await storage.update_order(card["order_id"], fields)
+        asyncio.create_task(mail.order("Исправлен", current | fields))
     return card_text(current | fields, draft.missing, d, "✏️ <b>Исправил</b>")
 
 
