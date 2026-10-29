@@ -21,7 +21,7 @@
 ## Что понадобится
 1. **Сервер**: любой VPS с Ubuntu 22/24, 1 ГБ памяти. DeepSeek работает и из России.
 2. **Ключ DeepSeek**: platform.deepseek.com → API keys, пополнить баланс (Top up).
-3. **Токен бота**: @BotFather → /newbot. Затем там же: Bot Settings → **Business Mode → Turn on**.
+3. **Токен бота**: @BotFather → /newbot. Затем там же: Bot Settings → **Secretary Mode** (раньше Business Mode) **→ Turn on**.
 4. **Telegram Premium** на вашем аккаунте: без него Telegram для бизнеса недоступен.
 5. **Ключ Firebase**: console.firebase.google.com → проект crm-orders → ⚙️ Настройки проекта →
    Сервисные аккаунты → «Создать закрытый ключ». Скачается JSON.
