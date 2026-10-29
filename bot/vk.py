@@ -77,6 +77,7 @@ async def handle(c: httpx.AsyncClient, update: dict) -> None:
 async def run() -> None:
     async with httpx.AsyncClient(timeout=40) as c:
         server = None
+        delay = 5
         while True:
             try:
                 if server is None:
@@ -92,12 +93,14 @@ async def run() -> None:
                         server = None
                     continue
                 server["ts"] = data["ts"]
+                delay = 5
                 for upd in data.get("updates", []):
                     try:
                         await handle(c, upd)
                     except Exception:
                         log.exception("VK update failed: %s", upd.get("type"))
             except Exception:
-                log.exception("VK long poll error, reconnecting")
+                log.exception("VK long poll error, reconnecting in %s s", delay)
                 server = None
-                await asyncio.sleep(5)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 300)
