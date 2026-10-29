@@ -1,13 +1,16 @@
-"""Разовые запросы к Claude: разбор переписки в заказ, проверка «клиент ли это», тексты-напоминания."""
+"""Запросы к ИИ: разбор переписки в заказ, проверка «клиент ли это», тексты-напоминания, агент с инструментами.
+Провайдер выбирается в .env: LLM_PROVIDER=deepseek (по умолчанию) или anthropic (Claude)."""
 import json
+import logging
 from datetime import datetime
+from typing import Awaitable, Callable
 
-import anthropic
-from pydantic import BaseModel, Field
+import httpx
+from pydantic import BaseModel, Field, ValidationError
 
 from .config import cfg
 
-client = anthropic.AsyncAnthropic(api_key=cfg.anthropic_api_key or None)
+log = logging.getLogger("llm")
 
 DOW = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
 
@@ -20,19 +23,122 @@ def now_line() -> str:
     return f"Сейчас {now:%Y-%m-%d} ({DOW[now.weekday()]}), {now:%H:%M}, часовой пояс Калининград."
 
 
-# Запасная модель на случай отказа основной. Включено по умолчанию, на обычную работу не влияет.
-FALLBACK = {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
+# Инструмент агента: имя, описание и JSON-схема аргументов.
+Tool = dict
+Execute = Callable[[str, dict], Awaitable[object]]
+
+if cfg.llm_provider == "anthropic":
+    import anthropic
+
+    client = anthropic.AsyncAnthropic(api_key=cfg.anthropic_api_key or None)
+    # Запасная модель на случай отказа основной. На обычную работу не влияет.
+    FALLBACK = {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
+
+
+# ---------- DeepSeek (API совместим с OpenAI) ----------
+
+async def _deepseek(payload: dict) -> dict:
+    async with httpx.AsyncClient(timeout=120) as c:
+        r = await c.post(f"{cfg.deepseek_base_url}/chat/completions", json={"model": cfg.deepseek_model, **payload},
+                         headers={"Authorization": f"Bearer {cfg.deepseek_api_key}"})
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]
+
+
+def _example(schema: type[BaseModel]) -> str:
+    """Описание полей для подсказки: DeepSeek не принимает JSON-схему, только режим «ответ JSON»."""
+    props = schema.model_json_schema()
+    defs = props.get("$defs", {})
+    def describe(p):
+        if "$ref" in p:
+            p = defs[p["$ref"].split("/")[-1]]
+        if p.get("type") == "object":
+            return {k: describe(v) for k, v in p["properties"].items()}
+        if p.get("type") == "array":
+            return [describe(p["items"])]
+        kind = {"string": "строка", "boolean": "true/false", "integer": "число"}.get(p.get("type"), "")
+        return f"{kind}: {p['description']}" if p.get("description") else kind
+    return json.dumps(describe(props), ensure_ascii=False, indent=1)
 
 
 async def parse(system: str, user: str, schema: type[BaseModel], max_tokens: int = 4000) -> BaseModel:
-    resp = await client.beta.messages.parse(
-        model=cfg.model, max_tokens=max_tokens, system=system,
-        messages=[{"role": "user", "content": user}],
-        output_format=schema, output_config={"effort": cfg.effort}, **FALLBACK,
-    )
-    if resp.stop_reason == "refusal" or resp.parsed_output is None:
-        raise RuntimeError(f"Claude не вернул ответ: {resp.stop_reason}")
-    return resp.parsed_output
+    if cfg.llm_provider == "anthropic":
+        resp = await client.beta.messages.parse(
+            model=cfg.model, max_tokens=max_tokens, system=system,
+            messages=[{"role": "user", "content": user}],
+            output_format=schema, output_config={"effort": cfg.effort}, **FALLBACK,
+        )
+        if resp.stop_reason == "refusal" or resp.parsed_output is None:
+            raise RuntimeError(f"Claude не вернул ответ: {resp.stop_reason}")
+        return resp.parsed_output
+    messages = [{"role": "system", "content": f"{system}\n\nОтветь только JSON с полями:\n{_example(schema)}"},
+                {"role": "user", "content": user}]
+    for attempt in range(2):
+        msg = await _deepseek({"messages": messages, "max_tokens": max_tokens,
+                               "response_format": {"type": "json_object"}})
+        try:
+            return schema.model_validate_json(msg["content"])
+        except ValidationError as ex:
+            log.warning("bad JSON from model (attempt %s): %s", attempt + 1, ex)
+            messages += [{"role": "assistant", "content": msg["content"]},
+                         {"role": "user", "content": f"Ответ не подходит под формат: {ex}. Пришли JSON заново."}]
+    raise RuntimeError("ИИ дважды прислал неверный JSON")
+
+
+async def run_tools(system: str, user: str, tools: list[Tool], execute: Execute, max_steps: int = 10) -> str:
+    """Цикл агента: модель вызывает инструменты, пока не ответит текстом."""
+    def result(out) -> str:
+        return json.dumps(out, ensure_ascii=False, default=str)
+
+    async def safe(name: str, args: dict) -> tuple[object, bool]:
+        try:
+            return await execute(name, args), False
+        except Exception as ex:
+            log.exception("tool %s failed", name)
+            return {"error": str(ex)}, True
+
+    if cfg.llm_provider == "anthropic":
+        messages = [{"role": "user", "content": user}]
+        for _ in range(max_steps):
+            resp = await client.beta.messages.create(
+                model=cfg.model, max_tokens=8000, system=system, messages=messages,
+                tools=[{**t, "strict": True} for t in tools],
+                output_config={"effort": cfg.effort}, **FALLBACK,
+            )
+            if resp.stop_reason == "refusal":
+                return "ИИ отказался выполнять это поручение."
+            messages.append({"role": "assistant", "content": resp.content})
+            calls = [b for b in resp.content if b.type == "tool_use"]
+            if resp.stop_reason != "tool_use" or not calls:
+                return "".join(b.text for b in resp.content if b.type == "text").strip() or "Готово."
+            results = []
+            for c in calls:
+                out, err = await safe(c.name, c.input)
+                results.append({"type": "tool_result", "tool_use_id": c.id, "is_error": err, "content": result(out)})
+            messages.append({"role": "user", "content": results})
+        return "Слишком много шагов, остановился. Уточни поручение."
+
+    fns = [{"type": "function", "function": {"name": t["name"], "description": t["description"],
+                                             "parameters": t["input_schema"]}} for t in tools]
+    props = {t["name"]: t["input_schema"]["properties"] for t in tools}
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    for _ in range(max_steps):
+        msg = await _deepseek({"messages": messages, "tools": fns, "max_tokens": 4000})
+        calls = msg.get("tool_calls") or []
+        messages.append({k: v for k, v in msg.items() if k in ("role", "content", "tool_calls")})
+        if not calls:
+            return (msg.get("content") or "").strip() or "Готово."
+        for c in calls:
+            name = c["function"]["name"]
+            try:
+                args = json.loads(c["function"]["arguments"] or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            # Без строгой схемы модель может пропустить поле: недостающие считаем пустыми.
+            args = {k: str(args.get(k, "")) for k in props.get(name, {})}
+            out, _ = await safe(name, args)
+            messages.append({"role": "tool", "tool_call_id": c["id"], "content": result(out)})
+    return "Слишком много шагов, остановился. Уточни поручение."
 
 
 def format_dialog(history: list[dict], client_name: str) -> str:

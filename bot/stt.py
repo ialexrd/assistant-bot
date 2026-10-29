@@ -1,4 +1,4 @@
-"""Голосовые в текст. У Claude нет распознавания речи, поэтому здесь Яндекс SpeechKit или OpenAI Whisper."""
+"""Голосовые в текст. У DeepSeek и Claude нет распознавания речи, поэтому здесь Яндекс SpeechKit или OpenAI Whisper."""
 import asyncio
 import tempfile
 from pathlib import Path

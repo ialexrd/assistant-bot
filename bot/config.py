@@ -26,7 +26,13 @@ class Config:
     vk_token: str = os.getenv("VK_GROUP_TOKEN", "")
     vk_group_id: str = os.getenv("VK_GROUP_ID", "")
 
-    # Claude
+    # ИИ: deepseek | anthropic
+    llm_provider: str = os.getenv("LLM_PROVIDER", "deepseek")
+    deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "")
+    deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+    deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+
+    # Claude (если LLM_PROVIDER=anthropic)
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     model: str = os.getenv("ANTHROPIC_MODEL", "claude-opus-5-5")
     effort: str = os.getenv("ANTHROPIC_EFFORT", "medium")

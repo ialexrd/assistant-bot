@@ -1,5 +1,6 @@
 """Прогон логики без Telegram, Firebase и Claude: заглушки вместо них. Запуск: python -m tests.smoke"""
 import asyncio
+import json
 import os
 import sys
 import tempfile
@@ -128,20 +129,34 @@ async def test_flow():
 async def test_agent():
     calls = []
 
-    async def create(**kw):
-        calls.append(kw)
+    async def deepseek(payload):
+        calls.append(payload)
+        assert payload["tools"][0]["type"] == "function"
         if len(calls) == 1:
-            return NS(stop_reason="tool_use", content=[
-                NS(type="tool_use", id="t1", name="create_order", input={
-                    "name": "Иванов", "phone": "", "addr": "", "date": "2026-10-30", "time": "14:00", "sum": "3500",
-                    "src": "", "spec": "", "vol": "два кресла", "note": "", "status": "booked"})])
-        assert kw["messages"][-1]["content"][0]["type"] == "tool_result"
-        return NS(stop_reason="end_turn", content=[NS(type="text", text="Записал Иванова на чт 30.10 14:00")])
+            args = {"name": "Иванов", "date": "2026-10-30", "time": "14:00", "sum": "3500",
+                    "vol": "два кресла", "status": "booked"}  # часть полей пропущена, как бывает у модели
+            return {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "create_order", "arguments": json.dumps(args)}}]}
+        assert payload["messages"][-1]["role"] == "tool"
+        return {"role": "assistant", "content": "Записал Иванова на чт 30.10 14:00"}
 
-    llm.client = NS(beta=NS(messages=NS(create=create)))
+    llm._deepseek = deepseek
     answer, run = await agent.run("Запиши Иванова на четверг в 14, два кресла, 3500", [])
     assert "Иванова" in answer and run.changes and run.new_orders[0]["status"] == "booked"
-    assert all(t["strict"] and t["input_schema"]["additionalProperties"] is False for t in agent.TOOLS)
+    assert run.new_orders[0]["phone"] == ""
+
+
+async def test_parse_retry():
+    replies = iter(['{"name": "Анна"}', json.dumps({"is_client": True, "unclear": False, "name": "Анна", "phone": "",
+                                                    "addr": "", "vol": "диван", "summary": "диван"})])
+
+    async def deepseek(payload):
+        assert payload["response_format"] == {"type": "json_object"} and "is_client" in payload["messages"][0]["content"]
+        return {"role": "assistant", "content": next(replies)}
+
+    llm._deepseek = deepseek
+    res = await llm.parse("system", "user", llm.LeadCheck)
+    assert res.is_client and res.vol == "диван"
 
 
 def test_telegram_wiring():
@@ -154,4 +169,5 @@ test_phrases()
 test_telegram_wiring()
 asyncio.run(test_flow())
 asyncio.run(test_agent())
+asyncio.run(test_parse_retry())
 print("OK")

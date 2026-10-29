@@ -1,11 +1,5 @@
-"""Агент для личного чата владельца с ботом: Claude с инструментами CRM, планера, заметок и настроек."""
-import json
-import logging
-
+"""Агент для личного чата владельца с ботом: ИИ с инструментами CRM, планера, заметок и настроек."""
 from . import llm, settings, storage
-from .config import cfg
-
-log = logging.getLogger("agent")
 
 SYSTEM = f"""Ты личный ассистент владельца выездной химчистки мягкой мебели. {llm.BUSINESS}
 Владелец пишет или говорит голосом короткие поручения. Выполняй их инструментами: заявки и заказы в CRM,
@@ -23,7 +17,7 @@ S = {"type": "string"}
 
 
 def _tool(name: str, description: str, props: dict) -> dict:
-    return {"name": name, "description": description, "strict": True,
+    return {"name": name, "description": description,
             "input_schema": {"type": "object", "properties": props, "required": list(props),
                              "additionalProperties": False}}
 
@@ -132,28 +126,6 @@ async def run(text: str, recent: list[tuple[str, str]]) -> tuple[str, Run]:
     ctx = ""
     if recent:
         ctx = "Предыдущие сообщения:\n" + "\n".join(f"Я: {q}\nТы: {r}" for q, r in recent) + "\n\n"
-    messages = [{"role": "user", "content": f"{llm.now_line()}\n\n{ctx}Сообщение: {text}"}]
     r = Run()
-    for _ in range(10):
-        resp = await llm.client.beta.messages.create(
-            model=cfg.model, max_tokens=8000, system=SYSTEM, tools=TOOLS, messages=messages,
-            output_config={"effort": cfg.effort}, **llm.FALLBACK,
-        )
-        if resp.stop_reason == "refusal":
-            return "Claude отказался выполнять это поручение.", r
-        messages.append({"role": "assistant", "content": resp.content})
-        calls = [b for b in resp.content if b.type == "tool_use"]
-        if resp.stop_reason != "tool_use" or not calls:
-            answer = "".join(b.text for b in resp.content if b.type == "text").strip()
-            return answer or "Готово.", r
-        results = []
-        for c in calls:
-            try:
-                out, err = await r.call(c.name, c.input), False
-            except Exception as ex:
-                log.exception("tool %s failed", c.name)
-                out, err = {"error": str(ex)}, True
-            results.append({"type": "tool_result", "tool_use_id": c.id, "is_error": err,
-                            "content": json.dumps(out, ensure_ascii=False, default=str)})
-        messages.append({"role": "user", "content": results})
-    return "Слишком много шагов, остановился. Уточни поручение.", r
+    answer = await llm.run_tools(SYSTEM, f"{llm.now_line()}\n\n{ctx}Сообщение: {text}", TOOLS, r.call)
+    return answer, r
