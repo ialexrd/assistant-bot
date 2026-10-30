@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import secrets
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
@@ -369,6 +370,14 @@ async def main() -> None:
     sched.add_job(morning_job, "cron", hour=h, minute=m)
     h, m = map(int, cfg.master_summary_time.split(":"))
     sched.add_job(master_summary_job, "cron", hour=h, minute=m)
+    if not cfg.telegram:
+        # Без Telegram: только ВК, CRM и почта. Уведомления пишем в журнал.
+        async def log_notify(text: str, buttons: list[tuple[str, str]]) -> None:
+            log.info("Уведомление: %s", re.sub(r"<[^>]+>", "", text))
+        core.notify = log_notify
+        log.info("TELEGRAM=off: работаю только с ВКонтакте")
+        await vk.run()
+        return
     sched.start()
     if cfg.vk_token:
         asyncio.create_task(vk.run())

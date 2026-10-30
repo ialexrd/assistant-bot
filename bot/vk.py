@@ -48,6 +48,7 @@ async def message_text(c: httpx.AsyncClient, m: dict, transcribe: bool) -> str:
                     text = await stt.transcribe(audio, am.get("duration", 0))
                 except Exception:
                     log.exception("vk stt failed")
+            log.info("VK голосовое %s с: %s", am.get("duration", 0), text or "не распознано")
             parts.append(f"[голосовое] {text}" if text else "[голосовое сообщение]")
         else:
             parts.append({"photo": "[фото]", "video": "[видео]", "doc": "[файл]"}.get(kind, f"[{kind}]"))

@@ -135,6 +135,7 @@ async def test_flow():
     assert subjects[0].startswith("Новая заявка: Анна"), subjects
     assert "Записан: Анна, " in subjects[1] and "14:00" in subjects[1], subjects
     assert subjects[2].startswith("Исправлен: Анна") and subjects[3].startswith("Записан:") and len(MAIL) == 4, subjects
+    assert "Переписка:" in MAIL[0][1] and "угловой диван" in MAIL[0][1], MAIL[0][1]
     assert "Телефон: +79001234567" in MAIL[1][1] and "Адрес: Ленина 5, кв 3" in MAIL[1][1], MAIL[1][1]
 
 
@@ -177,9 +178,23 @@ def test_telegram_wiring():
     assert {"business_message", "business_connection", "message", "callback_query"} <= used, used
 
 
+async def test_without_telegram():
+    from bot import main, vk
+    ran = []
+
+    async def vk_run():
+        ran.append(1)
+        await core.notify("<b>Новая заявка</b>", [])
+
+    vk.run, main.cfg = vk_run, main.cfg.__class__(telegram=False)
+    await main.main()
+    assert ran and core.notify is not notify
+
+
 test_phrases()
 test_telegram_wiring()
 asyncio.run(test_flow())
 asyncio.run(test_agent())
 asyncio.run(test_parse_retry())
+asyncio.run(test_without_telegram())
 print("OK")

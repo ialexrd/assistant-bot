@@ -32,6 +32,10 @@ def _who(d: dict) -> str:
     return f"{name} (@{d['username']})" if d.get("username") else name
 
 
+def _dialog_for_mail(key: str, d: dict) -> str:
+    return "Переписка:\n" + llm.format_dialog(dialogs.history(key, 30), d["name"])
+
+
 # ---------- Входящие от клиентов ----------
 
 async def client_message(channel: str, chat_id: str, text: str, name: str = "", username: str = "") -> None:
@@ -68,7 +72,8 @@ async def _check_lead(key: str, d: dict) -> None:
             "note": "; ".join(x for x in (res.summary, contact) if x)}
     oid = await storage.add_order(lead)
     dialogs.update(key, order_id=oid, state="lead")
-    asyncio.create_task(mail.order("Новая заявка", lead, f"{CHANNEL_RU[d['channel']]}: {_who(d)}"))
+    asyncio.create_task(mail.order("Новая заявка", lead, f"{CHANNEL_RU[d['channel']]}: {_who(d)}\n\n"
+                                   + _dialog_for_mail(key, d)))
     await _notify(f"🆕 <b>Новая заявка</b> из {CHANNEL_RU[d['channel']]}\n{e(_who(d))}\n"
                   f"{e(res.summary)}\n\nЗаписал в CRM со статусом «новая».",
                   [("🙅 Не клиент", f"notclient:{key}:{oid}")])
@@ -123,8 +128,8 @@ async def book(key: str) -> None:
     if not current or current.get("status") != "booked":
         asyncio.create_task(storage.sync_to_sheets(fields))
     order = (current or {}) | fields
-    asyncio.create_task(mail.order("Записан", order, "Не нашёл в переписке: " + ", ".join(draft.missing)
-                                   if draft.missing else ""))
+    missing = "Не нашёл в переписке: " + ", ".join(draft.missing) + "\n\n" if draft.missing else ""
+    asyncio.create_task(mail.order("Записан", order, missing + _dialog_for_mail(key, d)))
     token = secrets.token_hex(4)
     dialogs.kv_set(f"card:{token}", {"key": key, "order_id": oid, "before": before})
     await _notify(card_text(order, draft.missing, d), card_buttons(token))
