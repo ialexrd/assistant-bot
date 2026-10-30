@@ -28,6 +28,11 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS messages_key ON messages(key, ts);
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
 """)
+# since: начало текущего обращения. У постоянного клиента каждое новое обращение начинается заново,
+# и ИИ видит только переписку с этого момента. 0 — первое обращение.
+if "since" not in {r[1] for r in _db.execute("PRAGMA table_info(dialogs)")}:
+    _db.execute("ALTER TABLE dialogs ADD COLUMN since INTEGER DEFAULT 0")
+    _db.commit()
 
 
 def get(key: str) -> dict | None:
@@ -61,9 +66,16 @@ def add_message(key: str, outgoing: bool, text: str, ts: int | None = None) -> N
 
 
 def history(key: str, limit: int = 40) -> list[dict]:
-    rows = _db.execute("SELECT ts, outgoing, text FROM messages WHERE key = ? ORDER BY ts DESC, id DESC LIMIT ?",
-                       (key, limit)).fetchall()
+    """Переписка текущего обращения (с момента since)."""
+    rows = _db.execute("SELECT ts, outgoing, text FROM messages WHERE key = ? "
+                       "AND ts >= COALESCE((SELECT since FROM dialogs WHERE key = ?), 0) "
+                       "ORDER BY ts DESC, id DESC LIMIT ?", (key, key, limit)).fetchall()
     return [dict(r) for r in reversed(rows)]
+
+
+def last_ts(key: str) -> int:
+    """Время последнего сообщения в диалоге, за всё время."""
+    return _db.execute("SELECT COALESCE(MAX(ts), 0) FROM messages WHERE key = ?", (key,)).fetchone()[0]
 
 
 def count_incoming(key: str) -> int:

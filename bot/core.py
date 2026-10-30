@@ -7,7 +7,7 @@ from collections import defaultdict
 from typing import Awaitable, Callable
 
 from . import dialogs, llm, mail, settings, storage
-from .fmt import CHANNEL_RU, e, order_card
+from .fmt import CHANNEL_RU, e, order_card, today
 
 log = logging.getLogger("core")
 
@@ -16,8 +16,8 @@ Notify = Callable[[str, list[tuple[str, str]]], Awaitable[None]]
 notify: Notify | None = None
 
 ORDER_KEYS = ("name", "phone", "addr", "date", "time", "sum", "vol", "note")
-LEAD_CHECKS = 4            # сколько первых сообщений даём ИИ, чтобы понять, клиент ли это
-NEW_CYCLE_GAP = 14 * 86400  # если клиент вернулся после закрытого заказа и паузы, это новая заявка
+LEAD_CHECKS = 4            # сколько первых сообщений обращения даём ИИ, чтобы понять, клиент ли это
+RECHECK_GAP = 2 * 86400    # постоянный клиент написал после паузы: снова проверяем, не новый ли это заказ
 
 _locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
@@ -38,18 +38,29 @@ def _dialog_for_mail(key: str, d: dict) -> str:
 
 # ---------- Входящие от клиентов ----------
 
+def _closed(o: dict | None) -> bool:
+    """Заказ завершён: выполнен, отказ или дата визита уже прошла. Следующее сообщение клиента — новое обращение."""
+    if not o:
+        return True
+    status = o.get("status") or "booked"
+    if status in ("done", "lost"):
+        return True
+    return status == "booked" and bool(o.get("date")) and o["date"] < today().strftime("%Y-%m-%d")
+
+
 async def client_message(channel: str, chat_id: str, text: str, name: str = "", username: str = "") -> None:
     key = f"{channel}:{chat_id}"
     async with _locks[key]:
-        before = dialogs.get(key)
         d = dialogs.ensure(key, channel, name, username)
-        last = dialogs.history(key, 1)
-        dialogs.add_message(key, False, text)
-        if before and d["order_id"] and last and time.time() - last[-1]["ts"] > NEW_CYCLE_GAP:
-            o = await storage.get_order(d["order_id"])
-            if not o or o.get("status") in ("done", "lost"):
-                dialogs.update(key, order_id="", state="unknown", checks=0)
-                d = dialogs.get(key)
+        now = int(time.time())
+        gap = now - dialogs.last_ts(key)
+        dialogs.add_message(key, False, text, now)
+        if d["order_id"] and _closed(await storage.get_order(d["order_id"])):
+            # Постоянный клиент вернулся после прошлого заказа: начинаем новое обращение
+            dialogs.update(key, order_id="", state="unknown", checks=0, since=now)
+        elif d["since"] and d["state"] == "unknown" and gap > RECHECK_GAP:
+            dialogs.update(key, checks=0, since=now)
+        d = dialogs.get(key)
         if settings.load()["auto_leads"] and d["state"] == "unknown" and not d["order_id"] \
                 and d["checks"] < LEAD_CHECKS:
             await _check_lead(key, d)
@@ -63,7 +74,9 @@ async def _check_lead(key: str, d: dict) -> None:
         log.exception("lead check failed for %s", key)
         return
     if not res.is_client:
-        if not res.unclear:
+        # Постоянного клиента (since > 0) не помечаем «не клиентом»: «спасибо, всё отлично» — не повод
+        # пропустить его следующий заказ. Просто ждём, пока он напишет по делу.
+        if not res.unclear and not d["since"]:
             dialogs.update(key, state="not_client")
         return
     contact = f"{CHANNEL_RU[d['channel']]}: @{d['username']}" if d.get("username") else CHANNEL_RU[d["channel"]]
@@ -113,6 +126,11 @@ async def book(key: str) -> None:
     async with _locks[key]:
         d = dialogs.get(key)
         current = await storage.get_order(d["order_id"]) if d["order_id"] else None
+        if current and _closed(current):
+            # «Записал» в диалоге, где прошлый заказ уже позади: это новый заказ, старый не трогаем
+            prev = (current.get("updatedAt") or current.get("createdAt") or 0) // 1000
+            dialogs.update(key, order_id="", since=max(prev, d["since"]) + 1)
+            d, current = dialogs.get(key), None
         draft = await llm.extract_order(llm.format_dialog(dialogs.history(key), d["name"]), d["name"], current)
         fields = {k: getattr(draft, k) for k in ORDER_KEYS if getattr(draft, k)}
         fields["status"] = "booked"

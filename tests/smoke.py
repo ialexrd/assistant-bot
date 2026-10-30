@@ -139,6 +139,42 @@ async def test_flow():
     assert "Телефон: +79001234567" in MAIL[1][1] and "Адрес: Ленина 5, кв 3" in MAIL[1][1], MAIL[1][1]
 
 
+async def test_returning_client():
+    core.notify = notify
+    # Анна записана, визит уже прошёл
+    await core.client_message("tg", "88", "Почистите диван? Ленина 5", "Анна")
+    await core.owner_message("tg", "88", "Записал, спасибо!", "Анна")
+    for _ in range(20):
+        await asyncio.sleep(0)
+    first = dialogs.get("tg:88")["order_id"]
+    DB[first]["date"] = "2020-01-01"
+    dialogs._db.execute("UPDATE messages SET ts = ts - 7 * 86400 WHERE key = 'tg:88'")  # это было неделю назад
+    # Благодарность после визита: не заявка, но и не «не клиент»
+    await core.client_message("tg", "88", "Спасибо, всё отлично", "Анна")
+    d = dialogs.get("tg:88")
+    assert d["state"] == "unknown" and not d["order_id"] and d["since"], d
+    # Через неделю снова пишет про диван: новая заявка, старый заказ не тронут
+    await core.client_message("tg", "88", "Здравствуйте, нужно ещё раз почистить диван", "Анна")
+    second = dialogs.get("tg:88")["order_id"]
+    assert second and second != first and DB[second]["status"] == "new", DB
+    assert DB[first]["status"] == "booked" and DB[first]["date"] == "2020-01-01"
+    # «Записал» в диалоге, где прошлый заказ уже позади, создаёт новый заказ
+    await core.client_message("vk", "99", "Ленина 5, диван", "Олег")
+    await core.owner_message("vk", "99", "Записал, спасибо!", "Олег")
+    for _ in range(20):
+        await asyncio.sleep(0)
+    old = dialogs.get("vk:99")["order_id"]
+    DB[old]["date"] = "2020-01-01"
+    await core.owner_message("vk", "99", "Записал, спасибо!", "Олег")
+    for _ in range(20):
+        await asyncio.sleep(0)
+    new = dialogs.get("vk:99")["order_id"]
+    assert new != old and DB[old]["date"] == "2020-01-01" and DB[new]["status"] == "booked", DB
+
+    # ИИ видит только новое обращение
+    assert all("Записал" not in m["text"] for m in dialogs.history("tg:88")), dialogs.history("tg:88")
+
+
 async def test_agent():
     calls = []
 
@@ -194,6 +230,7 @@ async def test_without_telegram():
 test_phrases()
 test_telegram_wiring()
 asyncio.run(test_flow())
+asyncio.run(test_returning_client())
 asyncio.run(test_agent())
 asyncio.run(test_parse_retry())
 asyncio.run(test_without_telegram())
