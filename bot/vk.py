@@ -2,6 +2,7 @@
 message_new — пишет клиент, message_reply — отвечает владелец от имени сообщества."""
 import asyncio
 import logging
+import re
 
 import httpx
 
@@ -75,15 +76,27 @@ async def handle(c: httpx.AsyncClient, update: dict) -> None:
         await core.client_message("vk", str(peer), text, name, screen)
 
 
+async def group_id(c: httpx.AsyncClient) -> str:
+    """Число из VK_GROUP_ID (club123, -123 и ссылка тоже подойдут), а если его нет — сообщество самого ключа."""
+    m = re.fullmatch(r"(?:club|public|-)?(\d+)", cfg.vk_group_id.strip().rsplit("/", 1)[-1])
+    if m:
+        return m.group(1)
+    res = await call(c, "groups.getById")
+    groups = res.get("groups", res) if isinstance(res, dict) else res
+    return str(groups[0]["id"])
+
+
 async def run() -> None:
     async with httpx.AsyncClient(timeout=40) as c:
         server = None
+        gid = ""
         delay = 5
         while True:
             try:
                 if server is None:
-                    server = await call(c, "groups.getLongPollServer", group_id=cfg.vk_group_id)
-                    log.info("VK long poll connected")
+                    gid = gid or await group_id(c)
+                    server = await call(c, "groups.getLongPollServer", group_id=gid)
+                    log.info("VK long poll connected, сообщество %s", gid)
                 r = await c.get(server["server"], params={"act": "a_check", "key": server["key"],
                                                           "ts": server["ts"], "wait": 25})
                 data = r.json()
