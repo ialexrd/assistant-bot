@@ -210,11 +210,12 @@ async def test_vk_owner():
     async def send_photo(c, peer, png, text=""):
         photos.append((peer, png[:4]))
 
-    async def orders_on(day):
-        return [{"time": "11:30", "addr": "Ломоносова 18", "name": "Наталья", "sum": "3000"}]
+    async def orders_between(start, end):
+        return [{"date": start, "time": "11:30", "addr": "Ломоносова 18", "name": "Наталья", "phone": "89226997799",
+                 "sum": "3000", "status": "booked"}]
 
-    real_photo, real_orders_on = vk.send_photo, storage.orders_on
-    vk.send_photo, storage.orders_on = send_photo, orders_on
+    real_photo, real_between = vk.send_photo, storage.orders_between
+    vk.send_photo, storage.orders_between = send_photo, orders_between
     await vk.handle(None, upd("message_new", 555, "Расписание на завтра"))
     await vk.handle(None, {"type": "message_new", "object": {"message": {
         "peer_id": 2_000_000_001, "from_id": 555, "text": "[club1|Чистка74], расписание"}}})
@@ -229,9 +230,9 @@ async def test_vk_owner():
     object.__setattr__(vk.cfg, "vk_master_ids", frozenset({888, 999}))
     photos.clear()
     await vk.handle(None, upd("message_new", 555, "[голосовое] Отправь скрины мастерам."))
-    assert len(photos) == 14 and {p[0] for p in photos} == {888, 999}, photos
+    assert len(photos) == 2 and {p[0] for p in photos} == {888, 999}, photos
     assert sent[-1][1].startswith("Отправил мастерам (2) расписание с "), sent[-1]
-    vk.send_photo, storage.orders_on = real_photo, real_orders_on
+    vk.send_photo, storage.orders_between = real_photo, real_between
     vk.call, agent.run = real_call, real_run
 
 
@@ -268,6 +269,13 @@ async def test_parse_retry():
     assert res.is_client and res.vol == "диван"
 
 
+def test_schedule_card():
+    from bot import schedule
+    assert schedule.mask_phone("89226997799") == "8922699****"
+    assert schedule.crm_date("2026-11-04", "11:15").startswith("04.11.2026 (")
+    assert schedule.render_list([{"date": "2026-11-04", "addr": "Ломоносова 18", "name": "Наталья"}])[0][:4] == b"\x89PNG"
+
+
 def test_ocr_sides():
     from bot import ocr
     box = lambda x1, x2: {"vertices": [{"x": str(x1), "y": "0"}, {"x": str(x2), "y": "40"}]}
@@ -299,6 +307,7 @@ async def test_without_telegram():
 test_phrases()
 test_telegram_wiring()
 test_ocr_sides()
+test_schedule_card()
 asyncio.run(test_flow())
 asyncio.run(test_returning_client())
 asyncio.run(test_vk_owner())

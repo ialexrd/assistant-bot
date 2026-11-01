@@ -105,17 +105,19 @@ async def send_photo(c: httpx.AsyncClient, peer: int, png: bytes, text: str = ""
 
 
 async def send_schedule(c: httpx.AsyncClient, peer: int, days: list[str], skip_empty: bool = False) -> int:
-    """Картинка с заказами на каждый день; для недели — только дни, где есть заказы. Возвращает число картинок."""
-    sent = 0
-    for day in days:
-        orders = await storage.orders_on(day)
-        if not orders and (len(days) > 1 or skip_empty):
-            continue
-        await send_photo(c, peer, schedule.render_day(day, orders))
-        sent += 1
-    if not sent and not skip_empty:
-        await send(c, peer, "На эти дни заказов нет.")
-    return sent
+    """Заказы за период списком карточек, как в мобильной CRM (длинный список — несколько картинок).
+    Возвращает число заказов."""
+    orders = [o for o in await storage.orders_between(days[0], days[-1])
+              if (o.get("status") or "booked") in ("booked", "done")]
+    if not orders and skip_empty:
+        return 0
+    if len(days) == 1:
+        title = f"Заказы · {schedule.day_title(days[0])}"
+    else:
+        title = f"Заказы с {days[0][8:]}.{days[0][5:7]} по {days[-1][8:]}.{days[-1][5:7]}"
+    for png in schedule.render_list(orders, f"{title} · {len(orders)}" if orders else title):
+        await send_photo(c, peer, png)
+    return len(orders)
 
 
 async def send_to_masters(c: httpx.AsyncClient, days: list[str]) -> str:
@@ -134,7 +136,7 @@ async def send_to_masters(c: httpx.AsyncClient, days: list[str]) -> str:
     else:
         period = f"с {days[0][8:]}.{days[0][5:7]} по {days[-1][8:]}.{days[-1][5:7]}"
     who = "мастеру" if len(cfg.vk_master_ids) == 1 else f"мастерам ({len(cfg.vk_master_ids)})"
-    text = (f"Отправил {who} расписание {period}: {done} дн. с заказами." if done
+    text = (f"Отправил {who} расписание {period}, заказов: {done}." if done
             else f"Заказов {period} нет, {who} ничего не отправил.")
     if failed:
         text += (f"\nНе дошло до {', '.join(failed)}: мастер должен хоть раз написать сообществу, "

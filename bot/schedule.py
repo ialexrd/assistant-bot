@@ -8,10 +8,12 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .fmt import DOW_SHORT, today
 
-W, PAD = 1080, 48
+W, PAD = 1170, 48
 FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
-BG, CARD, LINE = "#f5f5f3", "#ffffff", "#e6e6e3"
-TEXT, MUTED, ACCENT, GREEN = "#1a1a1a", "#7a7a7a", "#c0392b", "#1e8449"
+BG, CARD, LINE = "#f4f4f2", "#ffffff", "#ececec"
+TEXT, MUTED, SRC, ORANGE = "#1f1f1f", "#a8a8a8", "#9a9a9a", "#f2a422"
+DAYS_ACC = ["понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье"]
+PER_IMAGE = 8  # карточек на одной картинке, длинный список режем на несколько
 
 
 def _font(size: int, bold: bool = False):
@@ -21,8 +23,8 @@ def _font(size: int, bold: bool = False):
         return ImageFont.load_default(size)
 
 
-F_TITLE, F_SUB = _font(46, True), _font(30)
-F_ADDR, F_TIME, F_TEXT, F_SMALL = _font(36, True), _font(34, True), _font(31), _font(27)
+F_ADDR, F_DATE, F_NAME, F_SUM, F_VOL, F_SRC = _font(40), _font(40, True), _font(40), _font(40, True), _font(34), _font(34)
+F_HEAD = _font(34)
 
 
 def _wrap(draw: ImageDraw.ImageDraw, text: str, font, width: int) -> list[str]:
@@ -37,27 +39,28 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font, width: int) -> list[str]:
     return lines + [cur] if cur else lines
 
 
-def _card_rows(o: dict) -> list[tuple[str, object, str]]:
-    """Строки карточки: (текст, шрифт, цвет)."""
-    rows = [(o.get("time") or "время не указано", F_TIME, ACCENT if not o.get("time") else TEXT),
-            (o.get("addr") or "адрес не указан", F_ADDR, TEXT)]
-    who = " · ".join(x for x in (o.get("name"), o.get("phone")) if x)
-    if who:
-        rows.append((who, F_TEXT, TEXT))
-    if o.get("vol"):
-        rows.append((o["vol"], F_TEXT, MUTED))
-    meta = " · ".join(x for x in (f"{int(float(o['sum'])):,} ₽".replace(",", " ") if _num(o.get("sum")) else "",
-                                   f"мастер {o['spec']}" if o.get("spec") else "", o.get("src") or "") if x)
-    if meta:
-        rows.append((meta, F_SMALL, GREEN))
-    return rows
-
-
 def _num(v) -> bool:
     try:
         return float(v) > 0
     except (TypeError, ValueError):
         return False
+
+
+def _money(v) -> str:
+    return f"{int(float(v)):,} ₽".replace(",", " ")
+
+
+def mask_phone(phone: str) -> str:
+    """Как в CRM: последние 4 цифры звёздочками."""
+    return phone[:-4] + "****" if len(phone) > 4 else phone
+
+
+def crm_date(day: str, time: str = "") -> str:
+    """Как в CRM: «04.11.2026 (среду) 11:15», «… (Завтра)»."""
+    d = datetime.strptime(day, "%Y-%m-%d").date()
+    t = today().date()
+    word = {t: "Сегодня", t + timedelta(days=1): "Завтра"}.get(d, DAYS_ACC[d.weekday()])
+    return f"{d:%d.%m.%Y} ({word})" + (f" {time}" if time else "")
 
 
 def day_title(day: str) -> str:
@@ -67,34 +70,71 @@ def day_title(day: str) -> str:
     return f"{rel + ', ' if rel else ''}{DOW_SHORT[d.weekday()].lower()} {d:%d.%m}"
 
 
-def render_day(day: str, orders: list[dict]) -> bytes:
-    """PNG с заказами на день."""
+def _card(draw, o: dict, width: int) -> list[tuple]:
+    """Элементы карточки: ("line", текст, шрифт, цвет) или ("name", имя, телефон, сумма)."""
+    rows = [("line", ln, F_ADDR, TEXT) for ln in _wrap(draw, o.get("addr") or "адрес не указан", F_ADDR, width)]
+    rows.append(("line", crm_date(o["date"], o.get("time") or "") if o.get("date") else "дата не указана",
+                 F_DATE, ORANGE))
+    rows.append(("name", o.get("name") or "", mask_phone(o.get("phone") or ""),
+                 _money(o["sum"]) if _num(o.get("sum")) else ""))
+    vol = " ".join(x for x in (o.get("vol"), f"({o['note']})" if o.get("note") else "") if x)
+    rows += [("line", ln, F_VOL, MUTED) for ln in _wrap(draw, vol, F_VOL, width)] if vol else []
+    if o.get("src"):
+        rows.append(("gap",))
+        rows.append(("line", o["src"], F_SRC, SRC))
+    return rows
+
+
+def _row_h(r) -> int:
+    return 28 if r[0] == "gap" else (F_NAME.size if r[0] == "name" else r[2].size) + 22
+
+
+def render_list(orders: list[dict], title: str = "") -> list[bytes]:
+    """Список карточек, как в мобильной CRM, без кнопок. Длинный список — несколько картинок."""
     tmp = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-    inner = W - PAD * 2 - 56
-    cards = []
-    for o in orders:
-        lines = [(ln, f, c) for text, f, c in _card_rows(o) for ln in _wrap(tmp, text, f, inner)]
-        cards.append((lines, sum(f.size + 16 for _, f, _ in lines) + 48))
-    total = sum(o_sum for o_sum in (float(o["sum"]) for o in orders if _num(o.get("sum"))))
-    h = PAD + 60 + 50 + 40 + sum(ch + 24 for _, ch in cards) + (120 if not orders else 0) + PAD
-    img = Image.new("RGB", (W, h), BG)
-    d = ImageDraw.Draw(img)
-    d.text((PAD, PAD), f"Расписание · {day_title(day)}", font=F_TITLE, fill=TEXT)
-    sub = f"Заказов: {len(orders)}" + (f" · сумма {int(total):,} ₽".replace(",", " ") if total else "")
-    d.text((PAD, PAD + 70), sub, font=F_SUB, fill=MUTED)
-    y = PAD + 150
-    if not orders:
-        d.text((PAD, y + 20), "Заказов нет", font=F_TEXT, fill=MUTED)
-    for lines, ch in cards:
-        d.rounded_rectangle((PAD, y, W - PAD, y + ch), radius=22, fill=CARD, outline=LINE, width=2)
-        ty = y + 24
-        for text, f, c in lines:
-            d.text((PAD + 28, ty), text, font=f, fill=c)
-            ty += f.size + 16
-        y += ch + 24
-    buf = io.BytesIO()
-    img.save(buf, "PNG", optimize=True)
-    return buf.getvalue()
+    inner = W - PAD * 2 - 80
+    images = []
+    chunks = [orders[i:i + PER_IMAGE] for i in range(0, len(orders), PER_IMAGE)] or [[]]
+    for n, chunk in enumerate(chunks):
+        cards = [_card(tmp, o, inner) for o in chunk]
+        head = 90 if title else 0
+        h = PAD + head + sum(sum(_row_h(r) for r in c) + 70 for c in cards) + (100 if not chunk else 0) + PAD
+        img = Image.new("RGB", (W, h), BG)
+        d = ImageDraw.Draw(img)
+        y = PAD
+        if title:
+            part = f"  ({n + 1}/{len(chunks)})" if len(chunks) > 1 else ""
+            d.text((PAD + 8, y), title + part, font=F_HEAD, fill=SRC)
+            y += head
+        if not chunk:
+            d.text((PAD + 8, y + 20), "Заказов нет", font=F_ADDR, fill=MUTED)
+        body_top = y
+        if cards:
+            d.rounded_rectangle((PAD, body_top, W - PAD, h - PAD), radius=34, fill=CARD, outline=LINE, width=2)
+        for k, rows in enumerate(cards):
+            y += 36
+            for r in rows:
+                x = PAD + 48
+                if r[0] == "line":
+                    d.text((x, y), r[1], font=r[2], fill=r[3])
+                elif r[0] == "name":
+                    _, name, phone, money = r
+                    for txt, f, c in ((name, F_NAME, TEXT), (phone, F_NAME, "#4a4a4a"), (money, F_SUM, TEXT)):
+                        if txt:
+                            d.text((x, y), txt, font=f, fill=c)
+                            x += d.textlength(txt, font=f) + 34
+                y += _row_h(r)
+            y += 34
+            if k < len(cards) - 1:
+                d.line((PAD, y, W - PAD, y), fill=LINE, width=2)
+        buf = io.BytesIO()
+        img.save(buf, "PNG", optimize=True)
+        images.append(buf.getvalue())
+    return images
+
+
+def render_day(day: str, orders: list[dict]) -> bytes:
+    return render_list(orders, f"Заказы · {day_title(day)}")[0]
 
 
 NUM_WORDS = {"один": 1, "одну": 1, "два": 2, "две": 2, "три": 3, "четыре": 4, "пять": 5, "шесть": 6, "семь": 7,
