@@ -204,6 +204,24 @@ async def test_vk_owner():
     DB["o9"] = {"name": "Наталья"}
     await vk.handle(None, upd("message_new", 555, "Отмена"))
     assert "o9" not in DB and sent[-1][1].startswith("↩️")
+    # «расписание на завтра» — картинка, а не поручение ИИ
+    photos = []
+
+    async def send_photo(c, peer, png, text=""):
+        photos.append((peer, png[:4]))
+
+    async def orders_on(day):
+        return [{"time": "11:30", "addr": "Ломоносова 18", "name": "Наталья", "sum": "3000"}]
+
+    real_photo, real_orders_on = vk.send_photo, storage.orders_on
+    vk.send_photo, storage.orders_on = send_photo, orders_on
+    await vk.handle(None, upd("message_new", 555, "Расписание на завтра"))
+    await vk.handle(None, {"type": "message_new", "object": {"message": {
+        "peer_id": 2_000_000_001, "from_id": 555, "text": "[club1|Чистка74], расписание"}}})
+    await vk.handle(None, {"type": "message_new", "object": {"message": {
+        "peer_id": 2_000_000_001, "from_id": 777, "text": "расписание"}}})  # не владелец — молчим
+    assert photos == [(555, b"\x89PNG"), (2_000_000_001, b"\x89PNG")] and len(agent_calls) == 1, photos
+    vk.send_photo, storage.orders_on = real_photo, real_orders_on
     vk.call, agent.run = real_call, real_run
 
 

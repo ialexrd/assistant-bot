@@ -8,7 +8,7 @@ from collections import defaultdict, deque
 
 import httpx
 
-from . import agent, core, mail, ocr, storage, stt
+from . import agent, core, mail, ocr, schedule, storage, stt
 from .config import cfg
 
 log = logging.getLogger("vk")
@@ -95,8 +95,37 @@ async def notify_owners(text: str, buttons: list[tuple[str, str]]) -> None:
                 log.exception("VK notify %s failed", uid)
 
 
+async def send_photo(c: httpx.AsyncClient, peer: int, png: bytes, text: str = "") -> None:
+    server = await call(c, "photos.getMessagesUploadServer", peer_id=peer)
+    up = (await c.post(server["upload_url"], files={"photo": ("schedule.png", png, "image/png")})).json()
+    saved = (await call(c, "photos.saveMessagesPhoto", server=up["server"], photo=up["photo"], hash=up["hash"]))[0]
+    att = f"photo{saved['owner_id']}_{saved['id']}" + (f"_{saved['access_key']}" if saved.get("access_key") else "")
+    await call(c, "messages.send", peer_id=peer, message=text, attachment=att, random_id=random.randint(1, 2**31 - 1))
+
+
+async def send_schedule(c: httpx.AsyncClient, peer: int, days: list[str]) -> None:
+    """Картинка с заказами на каждый день; для недели — только дни, где есть заказы."""
+    sent = 0
+    for day in days:
+        orders = await storage.orders_on(day)
+        if not orders and len(days) > 1:
+            continue
+        await send_photo(c, peer, schedule.render_day(day, orders))
+        sent += 1
+    if not sent:
+        await send(c, peer, "На эти дни заказов нет.")
+
+
 async def owner_command(c: httpx.AsyncClient, peer: int, text: str) -> None:
     """Владелец пишет сообществу со своей страницы: это поручение ассистенту."""
+    days = schedule.parse_days(text)
+    if days:
+        try:
+            await send_schedule(c, peer, days)
+        except Exception:
+            log.exception("schedule failed")
+            await send(c, peer, "Не получилось отправить расписание, посмотрите журнал бота.")
+        return
     if text.strip().lower() in UNDO_WORDS:
         changes = _last_changes.pop(peer, None)
         if changes:
@@ -129,6 +158,12 @@ async def handle(c: httpx.AsyncClient, update: dict) -> None:
     obj = update["object"]
     m = obj["message"] if kind == "message_new" else obj
     peer = m.get("peer_id", 0)
+    if peer >= 2_000_000_000 and kind == "message_new" and m.get("from_id") in cfg.vk_owner_ids:
+        # Беседа (например, с мастерами): владелец пишет «расписание на завтра» — бот присылает картинку туда
+        days = schedule.parse_days(re.sub(r"^\[club\d+\|[^\]]*\][,\s]*", "", m.get("text") or ""))
+        if days:
+            await send_schedule(c, peer, days)
+        return
     if peer <= 0 or peer >= 2_000_000_000:  # только личные диалоги с людьми, без бесед
         return
     outgoing = kind == "message_reply" or m.get("out") == 1

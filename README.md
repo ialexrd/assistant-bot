@@ -46,9 +46,13 @@
 заявках и записях при `TELEGRAM=off` приходят туда же. Скриншоты переписки бот читает через Яндекс Vision OCR (тот же ключ Яндекса,
 нужна роль `ai.vision.user`), слева сообщения клиента, справа ваши.
 
+**Расписание картинкой**: напишите сообществу «расписание», «расписание на завтра», «расписание на неделю»
+или «расписание 05.11» — бот пришлёт карточки заказов, как в мобильной CRM. Работает и в беседе (например,
+с мастерами), куда добавлено сообщество: команду должен написать владелец.
+
 ## Установка на сервер
 ```bash
-sudo apt update && sudo apt install -y python3-venv ffmpeg git
+sudo apt update && sudo apt install -y python3-venv ffmpeg git fonts-dejavu-core
 sudo git clone https://github.com/ialexrd/assistant-bot /opt/assistant-bot && cd /opt/assistant-bot
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 cp .env.example .env && nano .env          # вписать токены и ключи
