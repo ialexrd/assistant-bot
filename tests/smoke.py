@@ -221,6 +221,11 @@ async def test_vk_owner():
     await vk.handle(None, {"type": "message_new", "object": {"message": {
         "peer_id": 2_000_000_001, "from_id": 777, "text": "расписание"}}})  # не владелец — молчим
     assert photos == [(555, b"\x89PNG"), (2_000_000_001, b"\x89PNG")] and len(agent_calls) == 1, photos
+    # «расписание мастеру на завтра» — картинка мастеру, владельцу отчёт
+    object.__setattr__(vk.cfg, "vk_master_ids", frozenset({888}))
+    await vk.handle(None, upd("message_new", 555, "расписание мастеру на завтра"))
+    assert photos[-1][0] == 888 and sent[-1] == (555, f"Отправил мастеру расписание на завтра, "
+                                                 f"{vk.schedule.day_title(vk.schedule.parse_days('расписание завтра')[0]).split(', ')[1]}.")
     vk.send_photo, storage.orders_on = real_photo, real_orders_on
     vk.call, agent.run = real_call, real_run
 

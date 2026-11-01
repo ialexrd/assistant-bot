@@ -29,6 +29,8 @@ class Config:
     vk_group_id: str = os.getenv("VK_GROUP_ID", "")
     # Ваши личные страницы ВК: их сообщения сообществу — поручения ассистенту, а не заявки клиентов
     vk_owner_ids: frozenset = _ids(os.getenv("VK_OWNER_IDS", ""))
+    # Мастера: их id ВК. Расписание картинкой приходит им в личку от сообщества по команде владельца
+    vk_master_ids: frozenset = _ids(os.getenv("VK_MASTER_IDS", ""))
 
     # ИИ: deepseek | anthropic
     llm_provider: str = os.getenv("LLM_PROVIDER", "deepseek")

@@ -98,11 +98,12 @@ def render_day(day: str, orders: list[dict]) -> bytes:
 
 
 def parse_days(text: str) -> list[str] | None:
-    """«расписание», «расписание завтра», «расписание неделя», «расписание 05.11». None — это не команда."""
-    t = text.strip().lower().replace("ё", "е")
-    if not t.startswith("расписание"):
-        return None
-    rest = re.sub(r"^[\s,.:!]*(на\s+)?", "", t[len("расписание"):])
+    """Команда расписания: «расписание», «скрины на завтра», «отправь скрины мастеру на неделю», «расписание 05.11».
+    Можно голосом. None — это не команда."""
+    t = text.lower().replace("ё", "е")
+    if "[скриншот]" in t or "[фото" in t or not re.search(r"расписан|скрин", t):
+        return None  # скриншот переписки с подписью — это поручение, а не просьба о расписании
+    rest = t
     base = today().date()
     if not rest or "сегодня" in rest:
         days = [base]

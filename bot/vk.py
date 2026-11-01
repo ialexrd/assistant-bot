@@ -103,17 +103,37 @@ async def send_photo(c: httpx.AsyncClient, peer: int, png: bytes, text: str = ""
     await call(c, "messages.send", peer_id=peer, message=text, attachment=att, random_id=random.randint(1, 2**31 - 1))
 
 
-async def send_schedule(c: httpx.AsyncClient, peer: int, days: list[str]) -> None:
-    """Картинка с заказами на каждый день; для недели — только дни, где есть заказы."""
+async def send_schedule(c: httpx.AsyncClient, peer: int, days: list[str], skip_empty: bool = False) -> int:
+    """Картинка с заказами на каждый день; для недели — только дни, где есть заказы. Возвращает число картинок."""
     sent = 0
     for day in days:
         orders = await storage.orders_on(day)
-        if not orders and len(days) > 1:
+        if not orders and (len(days) > 1 or skip_empty):
             continue
         await send_photo(c, peer, schedule.render_day(day, orders))
         sent += 1
-    if not sent:
+    if not sent and not skip_empty:
         await send(c, peer, "На эти дни заказов нет.")
+    return sent
+
+
+async def send_to_masters(c: httpx.AsyncClient, days: list[str]) -> str:
+    """Расписание мастерам в личку. Возвращает отчёт для владельца."""
+    if not cfg.vk_master_ids:
+        return "Мастер не указан: впишите его id ВК в VK_MASTER_IDS на сервере."
+    done, failed = 0, []
+    for uid in cfg.vk_master_ids:
+        try:
+            done = max(done, await send_schedule(c, uid, days, skip_empty=True))
+        except Exception:
+            log.exception("schedule to master %s failed", uid)
+            failed.append(str(uid))
+    titles = ", ".join(schedule.day_title(d) for d in days) if len(days) < 3 else "неделю"
+    text = f"Отправил мастеру расписание на {titles.lower()}." if done else f"Заказов на {titles.lower()} нет, мастеру ничего не отправил."
+    if failed:
+        text += (f"\nНе дошло до {', '.join(failed)}: мастер должен хоть раз написать сообществу, "
+                 "иначе ВК не даёт ему отправлять сообщения.")
+    return text
 
 
 async def owner_command(c: httpx.AsyncClient, peer: int, text: str) -> None:
@@ -121,7 +141,10 @@ async def owner_command(c: httpx.AsyncClient, peer: int, text: str) -> None:
     days = schedule.parse_days(text)
     if days:
         try:
-            await send_schedule(c, peer, days)
+            if re.search(r"мастер|отправ|скинь|перешли", text.lower()):
+                await send(c, peer, await send_to_masters(c, days))
+            else:
+                await send_schedule(c, peer, days)
         except Exception:
             log.exception("schedule failed")
             await send(c, peer, "Не получилось отправить расписание, посмотрите журнал бота.")
