@@ -19,6 +19,7 @@ _names: dict[int, tuple[str, str]] = {}
 _recent: dict[int, deque] = defaultdict(lambda: deque(maxlen=3))  # последние поручения владельца
 _last_changes: dict[int, list] = {}  # для «отмена»: изменения последнего поручения
 UNDO_WORDS = {"отмена", "отмени", "отменить"}
+MASTER_DEFAULT_DAYS = 7  # «отправь скрины мастерам» без срока — на неделю вперёд
 
 
 async def call(c: httpx.AsyncClient, method: str, **params) -> dict:
@@ -128,8 +129,13 @@ async def send_to_masters(c: httpx.AsyncClient, days: list[str]) -> str:
         except Exception:
             log.exception("schedule to master %s failed", uid)
             failed.append(str(uid))
-    titles = ", ".join(schedule.day_title(d) for d in days) if len(days) < 3 else "неделю"
-    text = f"Отправил мастеру расписание на {titles.lower()}." if done else f"Заказов на {titles.lower()} нет, мастеру ничего не отправил."
+    if len(days) < 3:
+        period = "на " + ", ".join(schedule.day_title(d) for d in days).lower()
+    else:
+        period = f"с {days[0][8:]}.{days[0][5:7]} по {days[-1][8:]}.{days[-1][5:7]}"
+    who = "мастеру" if len(cfg.vk_master_ids) == 1 else f"мастерам ({len(cfg.vk_master_ids)})"
+    text = (f"Отправил {who} расписание {period}: {done} дн. с заказами." if done
+            else f"Заказов {period} нет, {who} ничего не отправил.")
     if failed:
         text += (f"\nНе дошло до {', '.join(failed)}: мастер должен хоть раз написать сообществу, "
                  "иначе ВК не даёт ему отправлять сообщения.")
@@ -138,10 +144,11 @@ async def send_to_masters(c: httpx.AsyncClient, days: list[str]) -> str:
 
 async def owner_command(c: httpx.AsyncClient, peer: int, text: str) -> None:
     """Владелец пишет сообществу со своей страницы: это поручение ассистенту."""
-    days = schedule.parse_days(text)
+    to_masters = bool(re.search(r"мастер|отправ|скинь|перешли", text.lower()))
+    days = schedule.parse_days(text, default_days=MASTER_DEFAULT_DAYS if to_masters else 1)
     if days:
         try:
-            if re.search(r"мастер|отправ|скинь|перешли", text.lower()):
+            if to_masters:
                 await send(c, peer, await send_to_masters(c, days))
             else:
                 await send_schedule(c, peer, days)

@@ -97,25 +97,54 @@ def render_day(day: str, orders: list[dict]) -> bytes:
     return buf.getvalue()
 
 
-def parse_days(text: str) -> list[str] | None:
-    """Команда расписания: «расписание», «скрины на завтра», «отправь скрины мастеру на неделю», «расписание 05.11».
-    Можно голосом. None — это не команда."""
+NUM_WORDS = {"один": 1, "одну": 1, "два": 2, "две": 2, "три": 3, "четыре": 4, "пять": 5, "шесть": 6, "семь": 7,
+             "восемь": 8, "девять": 9, "десять": 10, "четырнадцать": 14, "пару": 2}
+MAX_DAYS = 31
+
+
+def _date(base, dd: str, mm: str):
+    d = base.replace(day=int(dd), month=int(mm))
+    return d if d >= base - timedelta(days=60) else d.replace(year=d.year + 1)
+
+
+def _count(t: str, unit: str) -> int | None:
+    """«на 3 дня», «на две недели»: число перед словом unit."""
+    m = re.search(rf"(\d+|{'|'.join(NUM_WORDS)})\s+{unit}", t)
+    if not m:
+        return None
+    return int(m.group(1)) if m.group(1).isdigit() else NUM_WORDS[m.group(1)]
+
+
+def parse_days(text: str, default_days: int = 1) -> list[str] | None:
+    """Команда расписания, можно голосом: «расписание», «скрины на завтра», «отправь скрины мастеру на неделю»,
+    «на 3 дня», «на две недели», «до 15.11», «с 03.11 по 10.11», «расписание 05.11».
+    Если срок не назван — default_days дней начиная с сегодня. None — это не команда."""
     t = text.lower().replace("ё", "е")
     if "[скриншот]" in t or "[фото" in t or not re.search(r"расписан|скрин", t):
         return None  # скриншот переписки с подписью — это поручение, а не просьба о расписании
-    rest = t
     base = today().date()
-    if not rest or "сегодня" in rest:
-        days = [base]
-    elif "послезавтра" in rest:
-        days = [base + timedelta(days=2)]
-    elif "завтра" in rest:
-        days = [base + timedelta(days=1)]
-    elif "недел" in rest:
-        days = [base + timedelta(days=i) for i in range(7)]
-    elif m := re.search(r"(\d{1,2})[./](\d{1,2})", rest):
-        day = base.replace(day=int(m.group(1)), month=int(m.group(2)))
-        days = [day if day >= base - timedelta(days=60) else day.replace(year=day.year + 1)]
+    dates = [_date(base, dd, mm) for dd, mm in re.findall(r"(\d{1,2})[./](\d{1,2})", t)]
+    if len(dates) >= 2:
+        start, end = min(dates[:2]), max(dates[:2])
+    elif dates and re.search(r"\bдо\s+\d", t):
+        start, end = base, dates[0]
+    elif dates:
+        start = end = dates[0]
+    elif (n := _count(t, "дн")) or (n := _count(t, "дня")):
+        start, end = base, base + timedelta(days=n - 1)
+    elif n := _count(t, "недел"):
+        start, end = base, base + timedelta(days=7 * n - 1)
+    elif "месяц" in t:
+        start, end = base, base + timedelta(days=29)
+    elif "недел" in t:
+        start, end = base, base + timedelta(days=6)
+    elif "послезавтра" in t:
+        start = end = base + timedelta(days=2)
+    elif "завтра" in t:
+        start = end = base + timedelta(days=1)
+    elif "сегодня" in t:
+        start = end = base
     else:
-        days = [base]
-    return [d.strftime("%Y-%m-%d") for d in days]
+        start, end = base, base + timedelta(days=default_days - 1)
+    n = min((end - start).days + 1, MAX_DAYS)
+    return [(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(max(n, 1))]

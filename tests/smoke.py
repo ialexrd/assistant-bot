@@ -224,8 +224,13 @@ async def test_vk_owner():
     # «расписание мастеру на завтра» — картинка мастеру, владельцу отчёт
     object.__setattr__(vk.cfg, "vk_master_ids", frozenset({888}))
     await vk.handle(None, upd("message_new", 555, "расписание мастеру на завтра"))
-    assert photos[-1][0] == 888 and sent[-1] == (555, f"Отправил мастеру расписание на завтра, "
-                                                 f"{vk.schedule.day_title(vk.schedule.parse_days('расписание завтра')[0]).split(', ')[1]}.")
+    assert photos[-1][0] == 888 and sent[-1][1].startswith("Отправил мастеру расписание на завтра"), sent[-1]
+    # Двум мастерам, без срока — на неделю вперёд: по картинке на каждый день с заказами
+    object.__setattr__(vk.cfg, "vk_master_ids", frozenset({888, 999}))
+    photos.clear()
+    await vk.handle(None, upd("message_new", 555, "[голосовое] Отправь скрины мастерам."))
+    assert len(photos) == 14 and {p[0] for p in photos} == {888, 999}, photos
+    assert sent[-1][1].startswith("Отправил мастерам (2) расписание с "), sent[-1]
     vk.send_photo, storage.orders_on = real_photo, real_orders_on
     vk.call, agent.run = real_call, real_run
 
