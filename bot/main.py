@@ -179,13 +179,7 @@ async def on_undo(cb: CallbackQuery):
     if not changes or not is_owner(cb.from_user.id):
         await cb.answer("Уже нельзя отменить")
         return
-    for collection, doc_id, before in reversed(changes):
-        if before is None:
-            await storage.delete_doc(collection, doc_id)
-        elif collection == "orders":
-            await storage.update_order(doc_id, before)
-        else:
-            await storage.update_task(doc_id, before)
+    await agent.undo(changes)
     await cb.message.edit_text(e(cb.message.text) + "\n\n<i>↩️ Отменено</i>")
     await cb.answer("Отменено")
 
@@ -374,7 +368,7 @@ async def main() -> None:
         # Без Telegram: только ВК, CRM и почта. Уведомления пишем в журнал.
         async def log_notify(text: str, buttons: list[tuple[str, str]]) -> None:
             log.info("Уведомление: %s", re.sub(r"<[^>]+>", "", text))
-        core.notify = log_notify
+        core.notify = vk.notify_owners if cfg.vk_owner_ids else log_notify
         log.info("TELEGRAM=off: работаю только с ВКонтакте")
         await vk.run()
         return

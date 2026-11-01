@@ -121,6 +121,17 @@ class Run:
         return {"error": f"нет инструмента {name}"}
 
 
+async def undo(changes: list) -> None:
+    """Откатить изменения одного поручения (Run.changes) в обратном порядке."""
+    for collection, doc_id, before in reversed(changes):
+        if before is None:
+            await storage.delete_doc(collection, doc_id)
+        elif collection == "orders":
+            await storage.update_order(doc_id, before)
+        else:
+            await storage.update_task(doc_id, before)
+
+
 async def run(text: str, recent: list[tuple[str, str]]) -> tuple[str, Run]:
     """recent: последние обмены (запрос, ответ) для контекста «а ещё добавь телефон»."""
     ctx = ""

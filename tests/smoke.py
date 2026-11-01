@@ -175,6 +175,38 @@ async def test_returning_client():
     assert all("Записал" not in m["text"] for m in dialogs.history("tg:88")), dialogs.history("tg:88")
 
 
+async def test_vk_owner():
+    from bot import vk
+    sent, agent_calls = [], []
+
+    async def call(c, method, **p):
+        if method == "messages.send":
+            sent.append((p["peer_id"], p["message"]))
+        return {}
+
+    async def run(text, recent):
+        agent_calls.append(text)
+        return "Записал Наталью на пн 02.11 11:30", NS(new_orders=[], changes=[("orders", "o9", None)])
+
+    real_call, real_run = vk.call, agent.run
+    vk.call, agent.run = call, run
+    object.__setattr__(vk.cfg, "vk_owner_ids", frozenset({555}))
+    upd = lambda kind, peer, text: {"type": kind, "object": {"message": {"peer_id": peer, "text": text}}
+                                                              if kind == "message_new" else
+                                                              {"peer_id": peer, "text": text, "out": 1}}
+    await vk.handle(None, upd("message_new", 777, "/id"))
+    assert sent[-1] == (777, "Ваш id ВКонтакте: 777")
+    await vk.handle(None, upd("message_new", 555, "Запиши Наталью на завтра 11:30, 3000"))
+    assert agent_calls == ["Запиши Наталью на завтра 11:30, 3000"] and "отмена" in sent[-1][1]
+    assert dialogs.get("vk:555") is None  # поручение владельца — не заявка клиента
+    await vk.handle(None, upd("message_reply", 555, "Записал Наталью"))  # ответ самого бота
+    assert len(agent_calls) == 1
+    DB["o9"] = {"name": "Наталья"}
+    await vk.handle(None, upd("message_new", 555, "Отмена"))
+    assert "o9" not in DB and sent[-1][1].startswith("↩️")
+    vk.call, agent.run = real_call, real_run
+
+
 async def test_agent():
     calls = []
 
@@ -231,6 +263,7 @@ test_phrases()
 test_telegram_wiring()
 asyncio.run(test_flow())
 asyncio.run(test_returning_client())
+asyncio.run(test_vk_owner())
 asyncio.run(test_agent())
 asyncio.run(test_parse_retry())
 asyncio.run(test_without_telegram())

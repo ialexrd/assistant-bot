@@ -27,6 +27,8 @@ class Config:
     # ВКонтакте: бот сообщества через Bots Long Poll
     vk_token: str = os.getenv("VK_GROUP_TOKEN", "")
     vk_group_id: str = os.getenv("VK_GROUP_ID", "")
+    # Ваши личные страницы ВК: их сообщения сообществу — поручения ассистенту, а не заявки клиентов
+    vk_owner_ids: frozenset = _ids(os.getenv("VK_OWNER_IDS", ""))
 
     # ИИ: deepseek | anthropic
     llm_provider: str = os.getenv("LLM_PROVIDER", "deepseek")
