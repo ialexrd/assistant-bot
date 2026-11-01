@@ -8,7 +8,7 @@ from collections import defaultdict, deque
 
 import httpx
 
-from . import agent, core, mail, storage, stt
+from . import agent, core, mail, ocr, storage, stt
 from .config import cfg
 
 log = logging.getLogger("vk")
@@ -41,7 +41,7 @@ async def user_name(c: httpx.AsyncClient, user_id: int) -> tuple[str, str]:
     return _names[user_id]
 
 
-async def message_text(c: httpx.AsyncClient, m: dict, transcribe: bool) -> str:
+async def message_text(c: httpx.AsyncClient, m: dict, transcribe: bool, read_images: bool = False) -> str:
     parts = [m.get("text") or ""]
     for a in m.get("attachments") or []:
         kind = a.get("type")
@@ -56,10 +56,21 @@ async def message_text(c: httpx.AsyncClient, m: dict, transcribe: bool) -> str:
                     log.exception("vk stt failed")
             log.info("VK голосовое %s с: %s", am.get("duration", 0), text or "не распознано")
             parts.append(f"[голосовое] {text}" if text else "[голосовое сообщение]")
+        elif kind == "photo" and read_images and cfg.yandex_api_key:
+            sizes = a["photo"].get("sizes") or []
+            best = max(sizes, key=lambda s: s.get("width", 0) * s.get("height", 0), default=None)
+            text = ""
+            if best and best.get("url"):
+                try:
+                    text = await ocr.recognize((await c.get(best["url"])).content)
+                except Exception:
+                    log.exception("vk ocr failed")
+            log.info("VK скриншот: %s", text[:200] or "не распознан")
+            parts.append(f"[скриншот]\n{text}" if text else "[фото, текст не распознан]")
         else:
             parts.append({"photo": "[фото]", "video": "[видео]", "doc": "[файл]"}.get(kind, f"[{kind}]"))
     for f in m.get("fwd_messages") or []:  # пересланные сообщения: владелец может переслать переписку
-        fwd = await message_text(c, f, transcribe)
+        fwd = await message_text(c, f, transcribe, read_images)
         if fwd:
             parts.append(f"[переслано] {fwd}")
     return " ".join(p for p in parts if p).strip()
@@ -126,7 +137,7 @@ async def handle(c: httpx.AsyncClient, update: dict) -> None:
         return
     if peer in cfg.vk_owner_ids:
         if not outgoing:  # исходящие в этом диалоге — ответы самого бота
-            text = await message_text(c, m, True)
+            text = await message_text(c, m, True, read_images=True)
             if text:
                 log.info("VK поручение: %s", text)
                 await owner_command(c, peer, text)

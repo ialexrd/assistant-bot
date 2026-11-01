@@ -240,6 +240,15 @@ async def test_parse_retry():
     assert res.is_client and res.vol == "диван"
 
 
+def test_ocr_sides():
+    from bot import ocr
+    box = lambda x1, x2: {"vertices": [{"x": str(x1), "y": "0"}, {"x": str(x2), "y": "40"}]}
+    ann = {"width": "1000", "blocks": [
+        {"boundingBox": box(50, 500), "lines": [{"text": "Ломоносова 18"}]},
+        {"boundingBox": box(150, 950), "lines": [{"text": "Завтра 11:30 удобно?"}]}]}
+    assert ocr.chat_text(ann).splitlines() == ["Клиент: Ломоносова 18", "Я: Завтра 11:30 удобно?"]
+
+
 def test_telegram_wiring():
     from bot import main
     used = set(main.dp.resolve_used_update_types())
@@ -261,6 +270,7 @@ async def test_without_telegram():
 
 test_phrases()
 test_telegram_wiring()
+test_ocr_sides()
 asyncio.run(test_flow())
 asyncio.run(test_returning_client())
 asyncio.run(test_vk_owner())
