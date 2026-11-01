@@ -18,6 +18,8 @@ class Config:
     bot_token: str = os.getenv("BOT_TOKEN", "")
     # TELEGRAM=off: бот работает только с ВКонтакте и почтой (например, если сервер не видит Telegram)
     telegram: bool = os.getenv("TELEGRAM", "on").lower() != "off"
+    # Прокси только для Telegram, например socks5://127.0.0.1:10808 (xray с ключом VLESS) или socks5://user:pass@host:port
+    telegram_proxy: str = os.getenv("TELEGRAM_PROXY", "").strip()
     owner_ids: frozenset = _ids(os.getenv("OWNER_IDS", ""))
     master_chat_id: str = os.getenv("MASTER_CHAT_ID", "")
     tz: ZoneInfo = ZoneInfo(os.getenv("TZ", "Europe/Kaliningrad"))

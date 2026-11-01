@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import Command
 from aiogram.types import (BusinessConnection, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
                            Message)
@@ -19,7 +20,8 @@ from .fmt import order as fmt_order
 from .fmt import task as fmt_task
 
 log = logging.getLogger("assistant")
-bot = Bot(cfg.bot_token, default=DefaultBotProperties(parse_mode="HTML"))
+bot = Bot(cfg.bot_token, default=DefaultBotProperties(parse_mode="HTML"),
+          session=AiohttpSession(proxy=cfg.telegram_proxy) if cfg.telegram_proxy else None)
 dp = Dispatcher()
 
 _recent: dict[int, deque] = defaultdict(lambda: deque(maxlen=3))  # последние обмены с агентом
