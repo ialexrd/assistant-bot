@@ -77,6 +77,7 @@ async def extract_order(dialog, name, current=None, correction=""):
     return llm.OrderDraft(**d)
 
 
+REAL_EXTRACT = llm.extract_order
 llm.check_lead, llm.extract_order = check_lead, extract_order
 
 
@@ -256,6 +257,38 @@ async def test_agent():
     assert run.new_orders[0]["phone"] == ""
 
 
+async def test_prices():
+    draft = {"name": "Анна", "phone": "", "addr": "", "date": "2026-11-03", "time": "", "sum": "", "vol": "диван, подушки",
+             "note": "кот", "missing": ["сумма"], "prices": [{"item": "диван", "qty": 1, "min": 3000, "max": 3500},
+                                                            {"item": "подушки", "qty": 4, "min": 500, "max": 600}]}
+
+    async def deepseek(payload):
+        return {"role": "assistant", "content": json.dumps(draft)}
+
+    llm._deepseek = deepseek
+    d = await REAL_EXTRACT("Клиент: диван и 4 подушки", "Анна")
+    assert d.sum == "5450" and "сумма" not in d.missing
+    assert d.note.startswith("кот\nЦены: диван: 3 000–3 500 ₽; подушки: 500–600 ₽/шт × 4")
+    draft["sum"] = "5000"  # точная сумма из переписки важнее среднего
+    assert (await REAL_EXTRACT("", "Анна")).sum == "5000"
+
+    calls = []
+
+    async def agent_llm(payload):
+        calls.append(payload)
+        if len(calls) == 1:
+            args = {"name": "Анна", "date": "2026-11-03", "vol": "диван", "status": "new", "sum": "",
+                    "prices": [{"item": "диван", "qty": 1, "min": 3000, "max": 3500}]}
+            return {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "create_order", "arguments": json.dumps(args)}}]}
+        return {"role": "assistant", "content": "Готово"}
+
+    llm._deepseek = agent_llm
+    _, run = await agent.run("[скриншот]\nЯ: диван 3000-3500", [])
+    o = run.new_orders[0]
+    assert o["sum"] == "3250" and "Цены: диван: 3 000–3 500 ₽" in o["note"] and "prices" not in o
+
+
 async def test_parse_retry():
     replies = iter(['{"name": "Анна"}', json.dumps({"is_client": True, "unclear": False, "name": "Анна", "phone": "",
                                                     "addr": "", "vol": "диван", "summary": "диван"})])
@@ -312,6 +345,7 @@ asyncio.run(test_flow())
 asyncio.run(test_returning_client())
 asyncio.run(test_vk_owner())
 asyncio.run(test_agent())
+asyncio.run(test_prices())
 asyncio.run(test_parse_retry())
 asyncio.run(test_without_telegram())
 print("OK")

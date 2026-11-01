@@ -11,6 +11,8 @@ SYSTEM = f"""Ты личный ассистент владельца выезд�
 life жизнь, спорт, отдых. Если конец дела не назван, ставь на час позже начала.
 Владелец может прислать скриншот переписки с клиентом: он придёт текстом после пометки [скриншот], строки
 «Клиент:» и «Я:» — кто что написал. Бери из него имя, телефон, адрес, дату, время и что чистить.
+Цены вида «диван 3000–3500, подушки 600 за штуку» передавай в prices по позициям с количеством: бот сам
+запишет их в заметку и поставит в сумму среднее. sum заполняй, только если владелец назвал точную сумму.
 Даты вида «завтра», «в четверг» переводи в ГГГГ-ММ-ДД. Ищи заказ перед изменением, если не знаешь его id.
 
 Отвечай по-русски, коротко, обычным текстом без разметки: что сделал, с датами в виде «чт 30.10»."""
@@ -28,11 +30,16 @@ ORDER_PROPS = {
     "name": S, "phone": S, "addr": S,
     "date": {"type": "string", "description": "ГГГГ-ММ-ДД или пусто"},
     "time": {"type": "string", "description": "ЧЧ:ММ или пусто"},
-    "sum": {"type": "string", "description": "число или пусто"},
+    "sum": {"type": "string", "description": "число, только если владелец назвал точную сумму; иначе пусто"},
     "src": {"type": "string", "description": "откуда клиент: Авито, ВК, Telegram, сарафан"},
     "spec": {"type": "string", "description": "мастер"},
     "vol": {"type": "string", "description": "что чистить"},
-    "note": S,
+    "note": {"type": "string", "description": "детали; цены сюда не пиши, они в prices"},
+    "prices": {"type": "array", "description": "цены из переписки по позициям, иначе пустой список",
+               "items": {"type": "object", "additionalProperties": False, "required": ["item", "qty", "min", "max"],
+                         "properties": {"item": S, "qty": {"type": "integer", "description": "штук, если цена за штуку"},
+                                        "min": {"type": "integer", "description": "цена от за штуку"},
+                                        "max": {"type": "integer", "description": "цена до за штуку"}}}},
     "status": {"type": "string", "enum": ["new", "thinking", "booked", "done", "lost"]},
 }
 
@@ -79,6 +86,14 @@ class Run:
             return [_short_order(o) for o in await storage.orders_between(a["date_from"], a["date_to"])]
         if name == "list_open_leads":
             return [_short_order(o) for o in await storage.open_leads()]
+        if name in ("create_order", "update_order"):
+            a = dict(a)
+            items = a.pop("prices", None) or []
+            if items:
+                note = a.get("note", "")
+                if name == "update_order" and not note:
+                    note = (await storage.get_order(a["order_id"]) or {}).get("note", "")
+                a["note"], a["sum"] = llm.with_prices(note, items, a.get("sum", ""))
         if name == "create_order":
             oid = await storage.add_order(a)
             self.changes.append(("orders", oid, None))

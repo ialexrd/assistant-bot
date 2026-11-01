@@ -2,6 +2,7 @@
 Провайдер выбирается в .env: LLM_PROVIDER=deepseek (по умолчанию) или anthropic (Claude)."""
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Awaitable, Callable
 
@@ -85,6 +86,12 @@ async def parse(system: str, user: str, schema: type[BaseModel], max_tokens: int
     raise RuntimeError("ИИ дважды прислал неверный JSON")
 
 
+def _arg(v, spec: dict):
+    if spec.get("type") == "array":
+        return v if isinstance(v, list) else []
+    return "" if v is None else str(v)
+
+
 async def run_tools(system: str, user: str, tools: list[Tool], execute: Execute, max_steps: int = 10) -> str:
     """Цикл агента: модель вызывает инструменты, пока не ответит текстом."""
     def result(out) -> str:
@@ -135,7 +142,7 @@ async def run_tools(system: str, user: str, tools: list[Tool], execute: Execute,
             except json.JSONDecodeError:
                 args = {}
             # Без строгой схемы модель может пропустить поле: недостающие считаем пустыми.
-            args = {k: str(args.get(k, "")) for k in props.get(name, {})}
+            args = {k: _arg(args.get(k), spec) for k, spec in props.get(name, {}).items()}
             out, _ = await safe(name, args)
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": result(out)})
     return "Слишком много шагов, остановился. Уточни поручение."
@@ -152,15 +159,55 @@ def format_dialog(history: list[dict], client_name: str) -> str:
 
 # ---------- Заказ из переписки ----------
 
+class PriceItem(BaseModel):
+    item: str = Field(description="Что чистим: «диван», «подушки»")
+    qty: int = Field(description="Сколько штук, если цена за штуку; иначе 1")
+    min: int = Field(description="Цена «от» за штуку в рублях")
+    max: int = Field(description="Цена «до» за штуку; если цена одна, то же число")
+
+
+def _money(n: float) -> str:
+    return f"{round(n):,}".replace(",", " ")
+
+
+def price_summary(items) -> tuple[str, str]:
+    """Строки цен для заметки и средняя сумма: половина от суммы всех «от» и всех «до»."""
+    rows, lo, hi = [], 0, 0
+    for p in items:
+        p = p if isinstance(p, dict) else p.model_dump()
+        qty = max(int(p.get("qty") or 1), 1)
+        a, b = sorted((int(p.get("min") or 0), int(p.get("max") or p.get("min") or 0)))
+        if not b:
+            continue
+        price = _money(a) if a == b else f"{_money(a)}–{_money(b)}"
+        rows.append(f"{p.get('item') or 'позиция'}: {price} ₽" + (f"/шт × {qty}" if qty > 1 else ""))
+        lo, hi = lo + a * qty, hi + b * qty
+    if not rows:
+        return "", ""
+    total = _money(lo) if lo == hi else f"{_money(lo)}–{_money(hi)}"
+    rows.append(f"Итого: {total} ₽, в сумму поставил среднее {_money((lo + hi) / 2)} ₽")
+    return "Цены: " + "; ".join(rows), str(round((lo + hi) / 2))
+
+
+def with_prices(note: str, items, sum_: str) -> tuple[str, str]:
+    """Добавляет цены в заметку; если итоговой суммы нет, ставит среднее из вилки."""
+    text, avg = price_summary(items or [])
+    if not text:
+        return note, sum_
+    note = re.sub(r"\s*Цены: .*$", "", note or "", flags=re.S).strip()
+    return (f"{note}\n{text}" if note else text), (sum_ or avg)
+
+
 class OrderDraft(BaseModel):
     name: str = Field(description="Имя клиента. Если в переписке не названо, имя из профиля")
     phone: str = Field(description="Телефон как написан, иначе пусто")
     addr: str = Field(description="Адрес: улица, дом, квартира, район или посёлок")
     date: str = Field(description="Дата визита ГГГГ-ММ-ДД, иначе пусто")
     time: str = Field(description="Время визита ЧЧ:ММ, иначе пусто")
-    sum: str = Field(description="Итоговая согласованная сумма, только число, иначе пусто")
+    sum: str = Field(description="Только если в переписке названа одна точная итоговая сумма; при ценах «от и до» пусто")
     vol: str = Field(description="Что чистим, коротко: «угловой диван + 2 кресла»")
-    note: str = Field(description="Важные детали: пятна, животные, этаж, домофон, как связаться. Коротко")
+    note: str = Field(description="Важные детали: пятна, животные, этаж, домофон, как связаться. Коротко. Цены сюда не пиши")
+    prices: list[PriceItem] = Field(default_factory=list, description="Каждая позиция с ценой из переписки: что, сколько штук, цена от и до за штуку. Нет цен — пустой список")
     missing: list[str] = Field(description="Чего не хватает из: имя, телефон, адрес, дата, время, сумма")
 
 
@@ -181,7 +228,12 @@ async def extract_order(dialog_text: str, profile_name: str, current: dict | Non
     if correction:
         parts.append(f"Владелец просит исправить карточку так: {correction}\n"
                      "Примени исправление к текущей карточке, остальное оставь как есть.")
-    return await parse(EXTRACT_SYSTEM, "\n\n".join(parts), OrderDraft)
+    draft = await parse(EXTRACT_SYSTEM, "\n\n".join(parts), OrderDraft)
+    if draft.prices:
+        draft.note, draft.sum = with_prices(draft.note, draft.prices, draft.sum)
+        if draft.sum:
+            draft.missing = [m for m in draft.missing if m != "сумма"]
+    return draft
 
 
 # ---------- Новый клиент или нет ----------
