@@ -374,10 +374,24 @@ async def main() -> None:
         log.info("TELEGRAM=off: работаю только с ВКонтакте")
         await vk.run()
         return
+    if cfg.vk_owner_ids:
+        # Уведомления и в Telegram, и в ВК, пока владелец пользуется обоими
+        async def notify_both(text: str, buttons: list[tuple[str, str]]) -> None:
+            await notify_owners(text, buttons)
+            await vk.notify_owners(text, buttons)
+        core.notify = notify_both
     sched.start()
-    if cfg.vk_token:
-        asyncio.create_task(vk.run())
-    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    vk_task = asyncio.create_task(vk.run()) if cfg.vk_token else None
+    try:
+        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    except Exception:
+        # Ошибка Telegram (неверный токен, нет связи) не должна останавливать ВКонтакте
+        log.exception("Telegram не запустился, работаю дальше только с ВКонтакте")
+        if not vk_task:
+            raise
+        if cfg.vk_owner_ids:
+            core.notify = vk.notify_owners
+        await vk_task
 
 
 if __name__ == "__main__":
