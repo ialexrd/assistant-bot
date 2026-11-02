@@ -128,9 +128,9 @@ async def send_to_masters(c: httpx.AsyncClient, days: list[str]) -> str:
     for uid in cfg.vk_master_ids:
         try:
             done = max(done, await send_schedule(c, uid, days, skip_empty=True))
-        except Exception:
+        except Exception as ex:
             log.exception("schedule to master %s failed", uid)
-            failed.append(str(uid))
+            failed.append((uid, str(ex)))
     if len(days) < 3:
         period = "на " + ", ".join(schedule.day_title(d) for d in days).lower()
     else:
@@ -138,9 +138,13 @@ async def send_to_masters(c: httpx.AsyncClient, days: list[str]) -> str:
     who = "мастеру" if len(cfg.vk_master_ids) == 1 else f"мастерам ({len(cfg.vk_master_ids)})"
     text = (f"Отправил {who} расписание {period}, заказов: {done}." if done
             else f"Заказов {period} нет, {who} ничего не отправил.")
-    if failed:
-        text += (f"\nНе дошло до {', '.join(failed)}: мастер должен хоть раз написать сообществу, "
-                 "иначе ВК не даёт ему отправлять сообщения.")
+    for uid, err in failed:
+        name = (await user_name(c, uid))[0] or str(uid)
+        if re.search(r"permission|privacy|901|without", err, re.I):
+            text += (f"\nНе дошло до {name}: ВК не даёт сообществу писать ему. Пусть он откроет сообщество, "
+                     "нажмёт «Написать сообщение» и отправит что угодно, или «Разрешить сообщения».")
+        else:
+            text += f"\nНе дошло до {name}: {err}"
     return text
 
 
