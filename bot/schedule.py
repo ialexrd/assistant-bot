@@ -14,6 +14,8 @@ BG, CARD, LINE = "#f4f4f2", "#ffffff", "#ececec"
 TEXT, MUTED, SRC, ORANGE = "#1f1f1f", "#a8a8a8", "#9a9a9a", "#f2a422"
 DAYS_ACC = ["понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье"]
 PER_IMAGE = 8  # карточек на одной картинке, длинный список режем на несколько
+MAX_H = 6000  # ВК не принимает слишком высокие картинки (ширина + высота до 14000)
+MAX_NOTE_LINES = 4
 
 
 def _font(size: int, bold: bool = False):
@@ -78,7 +80,11 @@ def _card(draw, o: dict, width: int) -> list[tuple]:
     rows.append(("name", o.get("name") or "", mask_phone(o.get("phone") or ""),
                  _money(o["sum"]) if _num(o.get("sum")) else ""))
     vol = " ".join(x for x in (o.get("vol"), f"({o['note']})" if o.get("note") else "") if x)
-    rows += [("line", ln, F_VOL, MUTED) for ln in _wrap(draw, vol, F_VOL, width)] if vol else []
+    lines = _wrap(draw, vol, F_VOL, width) if vol else []
+    if len(lines) > MAX_NOTE_LINES:  # длинная заметка (например, текст переписки) раздувает картинку
+        lines = lines[:MAX_NOTE_LINES]
+        lines[-1] = lines[-1].rstrip(" ,.;") + " …"
+    rows += [("line", ln, F_VOL, MUTED) for ln in lines]
     if o.get("src"):
         rows.append(("gap",))
         rows.append(("line", o["src"], F_SRC, SRC))
@@ -94,10 +100,20 @@ def render_list(orders: list[dict], title: str = "") -> list[bytes]:
     tmp = ImageDraw.Draw(Image.new("RGB", (1, 1)))
     inner = W - PAD * 2 - 80
     images = []
-    chunks = [orders[i:i + PER_IMAGE] for i in range(0, len(orders), PER_IMAGE)] or [[]]
-    for n, chunk in enumerate(chunks):
-        cards = [_card(tmp, o, inner) for o in chunk]
-        head = 90 if title else 0
+    head = 90 if title else 0
+    chunks, cur, cur_h = [], [], PAD * 2 + head
+    for o in orders:
+        c = _card(tmp, o, inner)
+        ch = sum(_row_h(r) for r in c) + 70
+        if cur and (len(cur) >= PER_IMAGE or cur_h + ch > MAX_H):
+            chunks.append(cur)
+            cur, cur_h = [], PAD * 2 + head
+        cur.append((o, c))
+        cur_h += ch
+    chunks = [*chunks, cur] if cur else (chunks or [[]])
+    for n, pairs in enumerate(chunks):
+        chunk = [o for o, _ in pairs]
+        cards = [c for _, c in pairs]
         h = PAD + head + sum(sum(_row_h(r) for r in c) + 70 for c in cards) + (100 if not chunk else 0) + PAD
         img = Image.new("RGB", (W, h), BG)
         d = ImageDraw.Draw(img)

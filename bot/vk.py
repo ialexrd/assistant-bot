@@ -1,12 +1,14 @@
 """ВКонтакте: сообщения сообщества через Bots Long Poll API.
 message_new — пишет клиент, message_reply — отвечает владелец от имени сообщества."""
 import asyncio
+import io
 import logging
 import random
 import re
 from collections import defaultdict, deque
 
 import httpx
+from PIL import Image
 
 from . import agent, core, mail, ocr, schedule, storage, stt
 from .config import cfg
@@ -97,8 +99,21 @@ async def notify_owners(text: str, buttons: list[tuple[str, str]]) -> None:
 
 
 async def send_photo(c: httpx.AsyncClient, peer: int, png: bytes, text: str = "") -> None:
-    server = await call(c, "photos.getMessagesUploadServer", peer_id=peer)
-    up = (await c.post(server["upload_url"], files={"photo": ("schedule.png", png, "image/png")})).json()
+    name, mime = "schedule.png", "image/png"
+    for attempt in range(3):
+        server = await call(c, "photos.getMessagesUploadServer", peer_id=peer)
+        up = (await c.post(server["upload_url"], files={"photo": (name, png, mime)})).json()
+        if up.get("photo") and up["photo"] != "[]":
+            break
+        # ВК иногда принимает файл, но не возвращает фото: пробуем ещё раз, потом в JPEG
+        log.warning("VK upload returned no photo (attempt %s): %s", attempt + 1, str(up)[:300])
+        await asyncio.sleep(1)
+        if attempt == 1:
+            buf = io.BytesIO()
+            Image.open(io.BytesIO(png)).convert("RGB").save(buf, "JPEG", quality=90)
+            png, name, mime = buf.getvalue(), "schedule.jpg", "image/jpeg"
+    else:
+        raise RuntimeError(f"VK не принял картинку: {str(up)[:200]}")
     saved = (await call(c, "photos.saveMessagesPhoto", server=up["server"], photo=up["photo"], hash=up["hash"]))[0]
     att = f"photo{saved['owner_id']}_{saved['id']}" + (f"_{saved['access_key']}" if saved.get("access_key") else "")
     await call(c, "messages.send", peer_id=peer, message=text, attachment=att, random_id=random.randint(1, 2**31 - 1))
