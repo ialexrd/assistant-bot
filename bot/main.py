@@ -13,7 +13,7 @@ from aiogram.types import (BusinessConnection, CallbackQuery, InlineKeyboardButt
                            Message)
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from . import agent, core, dialogs, llm, mail, settings, storage, stt, vk
+from . import agent, core, dialogs, llm, mail, ocr, settings, storage, stt, vk
 from .config import cfg
 from .fmt import DOW_SHORT, e, human_date, today
 from .fmt import order as fmt_order
@@ -273,6 +273,25 @@ async def on_voice(msg: Message):
         return
     await msg.answer(f"🎙 <i>{e(text)}</i>")
     await handle_owner_text(msg, text)
+
+
+@dp.message(F.chat.type == "private", F.photo | F.document.mime_type.startswith("image/"))
+async def on_photo(msg: Message):
+    """Скриншот переписки с клиентом: распознаём текст и отдаём ассистенту, как в ВК."""
+    if not is_owner(msg.from_user.id):
+        return
+    media = msg.photo[-1] if msg.photo else msg.document
+    try:
+        buf = await bot.download(media)
+        png = bool(msg.document and msg.document.mime_type == "image/png")
+        text = await ocr.recognize(buf.read(), "PNG" if png else "JPEG")
+    except Exception:
+        log.exception("ocr failed")
+        text = ""
+    if not text.strip():
+        await msg.answer("Не смог прочитать текст на картинке.")
+        return
+    await handle_owner_text(msg, f"{msg.caption or ''}\n[скриншот]\n{text}".strip())
 
 
 @dp.message(F.chat.type == "private", F.text)
