@@ -19,6 +19,9 @@ class Config:
     # TELEGRAM=off: бот работает только с ВКонтакте и почтой (например, если сервер не видит Telegram)
     telegram: bool = os.getenv("TELEGRAM", "on").lower() != "off"
     # Прокси только для Telegram, например socks5://127.0.0.1:10808 (xray с ключом VLESS) или socks5://user:pass@host:port
+    # Сколько секунд Telegram держит запрос открытым в ожидании сообщений. Через VPN долгие запросы
+    # иногда теряются: тогда ставьте 1–3.
+    telegram_poll_timeout: int = int(os.getenv("TELEGRAM_POLL_TIMEOUT", "10"))
     telegram_proxy: str = os.getenv("TELEGRAM_PROXY", "").strip()
     owner_ids: frozenset = _ids(os.getenv("OWNER_IDS", ""))
     master_chat_id: str = os.getenv("MASTER_CHAT_ID", "")

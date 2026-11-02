@@ -383,7 +383,8 @@ async def main() -> None:
     sched.start()
     vk_task = asyncio.create_task(vk.run()) if cfg.vk_token else None
     try:
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types(),
+                               polling_timeout=cfg.telegram_poll_timeout)
     except Exception:
         # Ошибка Telegram (неверный токен, нет связи) не должна останавливать ВКонтакте
         log.exception("Telegram не запустился, работаю дальше только с ВКонтакте")
