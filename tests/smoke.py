@@ -311,6 +311,41 @@ async def test_parse_retry():
     assert res.is_client and res.vol == "диван"
 
 
+async def test_infographic():
+    from bot import infographic, vk
+    import io as _io
+    from PIL import Image as _Image
+    buf = _io.BytesIO()
+    _Image.new("RGB", (800, 600), "#a33").save(buf, "JPEG")
+    photo = buf.getvalue()
+
+    async def parse(system, user, schema, max_tokens=0):
+        assert user.endswith(": сушка после чистки"), user
+        return infographic.Card(tag="Сушка", title="Посушим ==после чистки==", subtitle="В **разы** быстрее, чем 5 900 ₽",
+                                footer="выезд на дом")
+
+    orig = llm.parse
+    llm.parse = parse
+    try:
+        card = await infographic.make("Инфографика: сушка после чистки", photo)
+    finally:
+        llm.parse = orig
+    assert card[:2] == b"\xff\xd8" and _Image.open(_io.BytesIO(card)).size == (1080, 1350)
+    assert infographic._tokens("за 5 900 ₽", "**")[-1][0] == "5\u00a0900\u00a0₽"
+    sent = []
+
+    async def send(c, peer, text):
+        sent.append(text)
+
+    orig_send = vk.send
+    vk.send = send
+    try:
+        await vk.make_infographic(None, 1, {"text": "инфографика", "attachments": []})
+    finally:
+        vk.send = orig_send
+    assert "Пришлите фото" in sent[0]
+
+
 def test_schedule_card():
     from bot import schedule
     assert schedule.mask_phone("89226997799") == "8922699****"
@@ -355,6 +390,7 @@ asyncio.run(test_returning_client())
 asyncio.run(test_vk_owner())
 asyncio.run(test_agent())
 asyncio.run(test_prices())
+asyncio.run(test_infographic())
 asyncio.run(test_parse_retry())
 asyncio.run(test_without_telegram())
 print("OK")

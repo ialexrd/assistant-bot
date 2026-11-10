@@ -9,11 +9,11 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import Command
-from aiogram.types import (BusinessConnection, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
-                           Message)
+from aiogram.types import (BufferedInputFile, BusinessConnection, CallbackQuery, InlineKeyboardButton,
+                           InlineKeyboardMarkup, Message)
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from . import agent, core, dialogs, llm, mail, ocr, settings, storage, stt, vk
+from . import agent, core, dialogs, infographic, llm, mail, ocr, settings, storage, stt, vk
 from .config import cfg
 from .fmt import DOW_SHORT, e, human_date, today
 from .fmt import order as fmt_order
@@ -281,6 +281,15 @@ async def on_photo(msg: Message):
     if not is_owner(msg.from_user.id):
         return
     media = msg.photo[-1] if msg.photo else msg.document
+    if infographic.TRIGGER.search(msg.caption or ""):
+        await msg.answer("Делаю инфографику…")
+        try:
+            card = await infographic.make(msg.caption, (await bot.download(media)).read())
+            await msg.answer_photo(BufferedInputFile(card, "card.jpg"))
+        except Exception:
+            log.exception("infographic failed")
+            await msg.answer("Не получилось собрать картинку, посмотрите журнал бота.")
+        return
     try:
         buf = await bot.download(media)
         png = bool(msg.document and msg.document.mime_type == "image/png")
@@ -296,6 +305,9 @@ async def on_photo(msg: Message):
 
 @dp.message(F.chat.type == "private", F.text)
 async def on_text(msg: Message):
+    if is_owner(msg.from_user.id) and infographic.TRIGGER.search(msg.text) and len(msg.text) < 200:
+        await msg.answer("Пришлите фото с подписью, например: «инфографика: сушка после чистки».")
+        return
     if is_owner(msg.from_user.id):
         await handle_owner_text(msg, msg.text)
 

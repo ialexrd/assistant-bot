@@ -10,7 +10,7 @@ from collections import defaultdict, deque
 import httpx
 from PIL import Image
 
-from . import agent, core, mail, ocr, schedule, storage, stt
+from . import agent, core, infographic, mail, ocr, schedule, storage, stt
 from .config import cfg
 
 log = logging.getLogger("vk")
@@ -99,7 +99,7 @@ async def notify_owners(text: str, buttons: list[tuple[str, str]]) -> None:
 
 
 async def send_photo(c: httpx.AsyncClient, peer: int, png: bytes, text: str = "") -> None:
-    name, mime = "schedule.png", "image/png"
+    name, mime = ("card.jpg", "image/jpeg") if png[:2] == b"\xff\xd8" else ("schedule.png", "image/png")
     for attempt in range(3):
         server = await call(c, "photos.getMessagesUploadServer", peer_id=peer)
         up = (await c.post(server["upload_url"], files={"photo": (name, png, mime)})).json()
@@ -202,6 +202,35 @@ async def owner_command(c: httpx.AsyncClient, peer: int, text: str) -> None:
     await send(c, peer, answer)
 
 
+def _photo_urls(m: dict) -> list[str]:
+    urls = []
+    for a in m.get("attachments") or []:
+        if a.get("type") == "photo":
+            sizes = a["photo"].get("sizes") or []
+            best = max(sizes, key=lambda s: s.get("width", 0) * s.get("height", 0), default=None)
+            if best and best.get("url"):
+                urls.append(best["url"])
+    return urls
+
+
+async def make_infographic(c: httpx.AsyncClient, peer: int, m: dict) -> None:
+    """Владелец прислал фото с подписью «инфографика: …»: карточка на каждое фото."""
+    urls = _photo_urls(m)
+    if not urls:
+        await send(c, peer, "Пришлите фото с подписью, например: «инфографика: сушка после чистки». "
+                            "Можно сразу несколько фото, на каждое будет своя карточка.")
+        return
+    await send(c, peer, "Делаю инфографику…")
+    for url in urls[:5]:
+        try:
+            card = await infographic.make(m.get("text") or "", (await c.get(url)).content)
+            await send_photo(c, peer, card)
+        except Exception:
+            log.exception("infographic failed")
+            await send(c, peer, "Не получилось собрать картинку, посмотрите журнал бота.")
+            return
+
+
 async def handle(c: httpx.AsyncClient, update: dict) -> None:
     kind = update.get("type")
     if kind not in ("message_new", "message_reply"):
@@ -220,6 +249,9 @@ async def handle(c: httpx.AsyncClient, update: dict) -> None:
     outgoing = kind == "message_reply" or m.get("out") == 1
     if (m.get("text") or "").strip().lower() == "/id" and not outgoing:
         await send(c, peer, f"Ваш id ВКонтакте: {peer}")
+        return
+    if peer in cfg.vk_owner_ids and not outgoing and infographic.TRIGGER.search(m.get("text") or ""):
+        await make_infographic(c, peer, m)
         return
     if peer in cfg.vk_owner_ids:
         if not outgoing:  # исходящие в этом диалоге — ответы самого бота
