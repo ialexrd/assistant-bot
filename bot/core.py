@@ -55,8 +55,11 @@ async def client_message(channel: str, chat_id: str, text: str, name: str = "", 
         now = int(time.time())
         gap = now - dialogs.last_ts(key)
         dialogs.add_message(key, False, text, now)
-        if d["order_id"] and _closed(await storage.get_order(d["order_id"])):
+        prev = await storage.get_order(d["order_id"]) if d["order_id"] else None
+        if d["order_id"] and _closed(prev):
             # Постоянный клиент вернулся после прошлого заказа: начинаем новое обращение
+            if prev:
+                dialogs.kv_set(f"prev:{key}", _order_brief(prev))
             dialogs.update(key, order_id="", state="unknown", checks=0, since=now)
         elif d["since"] and d["state"] == "unknown" and gap > RECHECK_GAP:
             dialogs.update(key, checks=0, since=now)
@@ -66,12 +69,24 @@ async def client_message(channel: str, chat_id: str, text: str, name: str = "", 
             await _check_lead(key, d)
 
 
+def _order_brief(o: dict) -> str:
+    parts = [o.get("date", ""), o.get("time", ""), o.get("addr", ""), o.get("vol", ""),
+             f"{o['sum']} ₽" if o.get("sum") else "", o.get("status", "")]
+    return ", ".join(p for p in parts if p)
+
+
 async def _check_lead(key: str, d: dict) -> None:
     dialogs.update(key, checks=d["checks"] + 1)
+    previous = dialogs.kv_get(f"prev:{key}", "") if d["since"] else ""
     try:
-        res = await llm.check_lead(llm.format_dialog(dialogs.history(key, 10), d["name"]), d["name"])
+        res = await llm.check_lead(llm.format_dialog(dialogs.history(key, 10), d["name"]), d["name"], previous)
     except Exception:
         log.exception("lead check failed for %s", key)
+        return
+    if res.about_previous and previous:
+        # Вопрос по прошлому заказу: не заявка, но владельцу стоит знать
+        await _notify(f"💬 <b>Вопрос по прошлому заказу</b> из {CHANNEL_RU[d['channel']]}\n{e(_who(d))}\n"
+                      f"{e(res.summary)}\n\nЗаказ: {e(previous)}. В заявки не добавлял.")
         return
     if not res.is_client:
         # Постоянного клиента (since > 0) не помечаем «не клиентом»: «спасибо, всё отлично» — не повод

@@ -62,7 +62,10 @@ core.notify = notify
 
 
 # ---------- Заглушки Claude ----------
-async def check_lead(dialog, name):
+async def check_lead(dialog, name, previous=""):
+    if previous and "пятно" in dialog:
+        return llm.LeadCheck(is_client=False, unclear=False, name="", phone="", addr="", vol="",
+                             summary="Пятно вернулось после чистки", about_previous=True)
     is_client = "диван" in dialog
     return llm.LeadCheck(is_client=is_client, unclear=dialog.rstrip().endswith("Здравствуйте"), name="", phone="",
                          addr="", vol="диван" if is_client else "", summary="Хочет почистить диван")
@@ -154,6 +157,12 @@ async def test_returning_client():
     await core.client_message("tg", "88", "Спасибо, всё отлично", "Анна")
     d = dialogs.get("tg:88")
     assert d["state"] == "unknown" and not d["order_id"] and d["since"], d
+    # Вопрос по прошлому заказу: не заявка, владелец получает уведомление
+    SENT.clear()
+    await core.client_message("tg", "88", "Здравствуйте, на диване пятно проступило снова", "Анна")
+    assert not dialogs.get("tg:88")["order_id"] and "Вопрос по прошлому заказу" in SENT[-1][0], SENT
+    assert "Ленина 5" in SENT[-1][0]
+    dialogs._db.execute("UPDATE messages SET ts = ts - 3 * 86400 WHERE key = 'tg:88'")
     # Через неделю снова пишет про диван: новая заявка, старый заказ не тронут
     await core.client_message("tg", "88", "Здравствуйте, нужно ещё раз почистить диван", "Анна")
     second = dialogs.get("tg:88")["order_id"]

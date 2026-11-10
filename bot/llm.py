@@ -246,16 +246,24 @@ class LeadCheck(BaseModel):
     addr: str = Field(description="Адрес или район, если написал")
     vol: str = Field(description="Что хочет почистить, коротко")
     summary: str = Field(description="Суть обращения одной фразой")
+    about_previous: bool = Field(default=False, description=(
+        "Пишет про уже сделанный или назначенный заказ: вопрос, уход за мебелью, пятно вернулось, "
+        "благодарность, отзыв, оплата, перенос. Не новая заявка"))
 
 
 LEAD_SYSTEM = f"""{BUSINESS}
 Тебе показывают начало переписки с человеком, который написал владельцу. Определи, клиент ли это
 (спрашивает про чистку, цену, запись, сроки) или нет (друг, родственник, поставщик, спам, реклама).
-Если по сообщениям пока нельзя понять, поставь unclear."""
+Если по сообщениям пока нельзя понять, поставь unclear.
+Если показан прошлый заказ этого человека, он уже клиент. Новая заявка — только если он хочет новую чистку
+(другая мебель, повторная чистка, новый адрес или дата). Вопросы и сообщения про прошлый заказ — это
+about_previous=true и is_client=false."""
 
 
-async def check_lead(dialog_text: str, profile_name: str) -> LeadCheck:
+async def check_lead(dialog_text: str, profile_name: str, previous: str = "") -> LeadCheck:
     user = f"Имя в профиле: {profile_name or 'неизвестно'}\n\nПереписка:\n{dialog_text}"
+    if previous:
+        user = f"Прошлый заказ этого человека: {previous}\n\n{user}"
     return await parse(LEAD_SYSTEM, user, LeadCheck, 2000)
 
 
