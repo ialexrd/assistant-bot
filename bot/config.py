@@ -25,7 +25,7 @@ class Config:
     telegram_proxy: str = os.getenv("TELEGRAM_PROXY", "").strip()
     owner_ids: frozenset = _ids(os.getenv("OWNER_IDS", ""))
     master_chat_id: str = os.getenv("MASTER_CHAT_ID", "")
-    tz: ZoneInfo = ZoneInfo(os.getenv("TZ", "Europe/Kaliningrad"))
+    tz: ZoneInfo = ZoneInfo(os.getenv("TZ", "Asia/Yekaterinburg"))
     morning_time: str = os.getenv("MORNING_TIME", "09:00")
     master_summary_time: str = os.getenv("MASTER_SUMMARY_TIME", "20:00")
 
